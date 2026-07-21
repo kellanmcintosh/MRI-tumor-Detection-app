@@ -3,15 +3,10 @@
 Loads the Keras model once (see `get_model`) and exposes a simple
 array-in/prediction-out interface, independent of any HTTP concerns.
 
-Model sourcing note (this slice only): the model is pulled from the pinned
-Hugging Face Hub revision recorded in `app/config.py` via `hf_hub_download`
-the first time `get_model()` is called, and cached under `app/model/`
-(gitignored). This is a deliberate, scoped deviation from the target
-architecture described in CLAUDE.md, where the model is fetched at Docker
-*build* time by `scripts/download_model.py` and the running container never
-touches the network. That build pipeline is out of scope for this issue
-(tracked separately); this module's runtime download only exists to unblock
-local development and testing of the inference path.
+The model file is expected to already be present at `app.config.MODEL_PATH`,
+placed there by `scripts/download_model.py` at Docker *build* time. This
+module never touches the network -- see CLAUDE.md's "Architecture decisions"
+section.
 """
 
 from functools import lru_cache
@@ -19,36 +14,14 @@ from typing import Dict, Tuple
 
 import numpy as np
 import tensorflow as tf
-from huggingface_hub import hf_hub_download
 
-from app.config import (
-    CLASS_NAMES,
-    HF_MODEL_FILENAME,
-    HF_REPO_ID,
-    HF_REVISION,
-    MODEL_DIR,
-)
-
-
-def _download_model() -> str:
-    """Fetch the pinned model revision from the Hugging Face Hub, if needed.
-
-    `hf_hub_download` caches by revision hash, so repeated calls (e.g. across
-    test runs) are cheap no-ops once the file is on disk.
-    """
-    return hf_hub_download(
-        repo_id=HF_REPO_ID,
-        filename=HF_MODEL_FILENAME,
-        revision=HF_REVISION,
-        local_dir=MODEL_DIR,
-    )
+from app.config import CLASS_NAMES, MODEL_PATH
 
 
 @lru_cache(maxsize=1)
 def get_model() -> tf.keras.Model:
     """Load the trained model once and cache it for the process lifetime."""
-    model_path = _download_model()
-    return tf.keras.models.load_model(model_path)
+    return tf.keras.models.load_model(MODEL_PATH)
 
 
 def predict(preprocessed_image: tf.Tensor) -> Tuple[str, Dict[str, float]]:
