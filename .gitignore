@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv*/
+env/
+.venv/
+ENV/
+*.egg-info/
+.eggs/
+
+# Environment variables / secrets
+.env
+.env.local
+kaggle.json
+
+# Model files — the trained model lives on the Hugging Face Hub, never in git.
+# app/model/ is populated at Docker build time by scripts/download_model.py.
+*.h5
+*.keras
+*.pb
+*.pth
+*.pt
+*.onnx
+app/model/
+saved_model/
+checkpoints/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Dataset / large data files (the Kaggle dataset is downloaded locally for training only)
+data/
+datasets/
+*.zip
+*.npy
+*.npz
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
