@@ -1,0 +1,418 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap");
+
+:root {
+  --bg: #0a0e14;
+  --bg-grid: #0d1420;
+  --panel: #101722;
+  --panel-border: #1f2b3a;
+  --panel-border-hover: #2c4356;
+  --text: #e7edf3;
+  --text-dim: #8ea0b3;
+  --text-faint: #5a6b7d;
+  --accent: #5eead4;
+  --accent-strong: #2dd4bf;
+  --accent-dim: rgba(94, 234, 212, 0.12);
+  --error: #f87171;
+  --error-bg: rgba(248, 113, 113, 0.1);
+  --error-border: rgba(248, 113, 113, 0.35);
+  --radius: 10px;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* The `hidden` attribute must always win over any `display` rule below --
+   several elements toggle visibility via `.hidden = true/false` in script.js
+   and rely on the browser's default [hidden] behavior. */
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  min-height: 100vh;
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(var(--bg-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px);
+  background-size: 34px 34px;
+  color: var(--text);
+  font-family: var(--font-sans);
+  line-height: 1.5;
+  position: relative;
+}
+
+.scanlines {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at top, rgba(94, 234, 212, 0.06), transparent 55%);
+  z-index: 0;
+}
+
+/* ---------- Header ---------- */
+
+.site-header {
+  position: relative;
+  z-index: 1;
+  padding: 2.25rem 1.5rem 1.25rem;
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.brand-mark {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border-radius: 3px;
+  background: var(--accent);
+  box-shadow: 0 0 16px 2px var(--accent-dim);
+}
+
+.site-header h1 {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 1.4rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.subhead {
+  margin: 0.2rem 0 0;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  font-family: var(--font-mono);
+}
+
+/* ---------- Disclaimer ---------- */
+
+.disclaimer {
+  position: relative;
+  z-index: 1;
+  max-width: 960px;
+  margin: 0 auto 1.75rem;
+  padding: 0.85rem 1.5rem;
+  font-size: 0.88rem;
+  color: #fcd9b0;
+  background: rgba(251, 191, 36, 0.08);
+  border-top: 1px solid rgba(251, 191, 36, 0.3);
+  border-bottom: 1px solid rgba(251, 191, 36, 0.3);
+}
+
+.disclaimer strong {
+  color: #fde3b8;
+}
+
+.disclaimer-results {
+  margin: 1.5rem 0 0;
+  border-radius: var(--radius);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+}
+
+/* ---------- Layout ---------- */
+
+.layout {
+  position: relative;
+  z-index: 1;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0 1.5rem 3rem;
+  display: grid;
+  gap: 1.5rem;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+}
+
+.panel h2 {
+  margin: 0 0 1.1rem;
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* ---------- Dropzone ---------- */
+
+.dropzone {
+  border: 1.5px dashed var(--panel-border-hover);
+  border-radius: var(--radius);
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+  outline: none;
+}
+
+.dropzone:hover,
+.dropzone:focus-visible {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.dropzone.dragover {
+  border-color: var(--accent-strong);
+  background: var(--accent-dim);
+}
+
+.dropzone-content {
+  text-align: center;
+  color: var(--text-dim);
+  padding: 2rem;
+}
+
+.upload-icon {
+  width: 32px;
+  height: 32px;
+  color: var(--accent);
+  margin-bottom: 0.6rem;
+}
+
+.dropzone-content p {
+  margin: 0.2rem 0;
+}
+
+.dropzone-content strong {
+  color: var(--text);
+}
+
+.or-text {
+  font-size: 0.85rem;
+  color: var(--text-faint);
+}
+
+.dropzone-preview {
+  width: 100%;
+  padding: 1rem;
+  display: flex;
+  justify-content: center;
+}
+
+.dropzone-preview img {
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: 6px;
+  border: 1px solid var(--panel-border);
+}
+
+/* ---------- Buttons ---------- */
+
+.upload-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.btn {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding: 0.65rem 1.3rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: opacity 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #06231d;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-dim);
+  border-color: var(--panel-border-hover);
+}
+
+.btn-ghost:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* ---------- Error ---------- */
+
+.error-message {
+  margin: 1.1rem 0 0;
+  padding: 0.75rem 1rem;
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+  color: var(--error);
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+/* ---------- Results ---------- */
+
+.loading-state {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--text-dim);
+  padding: 1.5rem 0;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--panel-border-hover);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.results-grid {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 1.75rem;
+}
+
+@media (max-width: 640px) {
+  .results-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.gradcam-figure {
+  margin: 0;
+}
+
+.gradcam-figure img {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid var(--panel-border);
+  display: block;
+}
+
+.gradcam-figure figcaption {
+  margin-top: 0.6rem;
+  font-size: 0.78rem;
+  color: var(--text-faint);
+}
+
+.predicted-label-tag,
+.confidence-label-tag {
+  margin: 0 0 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+.confidence-label-tag {
+  margin-top: 1.5rem;
+}
+
+.predicted-class {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 1.9rem;
+  font-weight: 600;
+  color: var(--accent);
+  text-transform: capitalize;
+}
+
+.confidence-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.confidence-row {
+  display: grid;
+  grid-template-columns: 90px 1fr 48px;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+}
+
+.confidence-row .class-name {
+  text-transform: capitalize;
+  color: var(--text-dim);
+}
+
+.confidence-row.is-top .class-name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.confidence-bar-track {
+  display: block;
+  height: 8px;
+  background: var(--bg-grid);
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--panel-border);
+}
+
+.confidence-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--text-faint);
+  border-radius: 4px;
+}
+
+.confidence-row.is-top .confidence-bar-fill {
+  background: var(--accent);
+}
+
+.confidence-value {
+  text-align: right;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+
+/* ---------- Footer ---------- */
+
+.site-footer {
+  position: relative;
+  z-index: 1;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0 1.5rem 3rem;
+  color: var(--text-faint);
+  font-size: 0.8rem;
+}
