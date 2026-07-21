@@ -21,7 +21,7 @@ HF_REVISION = "a35027761d87b4b738d4d8d70efba85266e57f53"
 HF_MODEL_FILENAME = "tumor_classification_model.keras"
 
 # Local on-disk cache for the downloaded model file. Gitignored (see .gitignore's
-# `app/model/` entry) — this directory is populated at runtime for this
-# development slice; a later slice moves the fetch to Docker build time.
+# `app/model/` entry) — populated by `scripts/download_model.py` at Docker
+# build time; the running container never fetches it over the network.
 MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model")
 MODEL_PATH = os.path.join(MODEL_DIR, HF_MODEL_FILENAME)
