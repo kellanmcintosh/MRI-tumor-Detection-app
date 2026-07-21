@@ -5,18 +5,24 @@ Deliberately thin: `/predict` wires `preprocessing` -> `inference` ->
 codes/JSON. All real logic (image decoding, resizing, model loading,
 prediction, heatmap generation) lives in `app.preprocessing`,
 `app.inference`, and `app.gradcam` so each stays testable without spinning
-up FastAPI.
+up FastAPI. Static file serving (the `static/` frontend) is just a mount --
+no logic lives here either.
 """
 
 import base64
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.gradcam import generate_gradcam_overlay
 from app.inference import get_model, predict
 from app.preprocessing import ImageDecodeError, preprocess_image_bytes
+
+STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static")
 
 
 @asynccontextmanager
@@ -27,6 +33,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="MRI Tumor Classifier API", lifespan=lifespan)
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.get("/")
+def index() -> FileResponse:
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 
 @app.get("/health")
