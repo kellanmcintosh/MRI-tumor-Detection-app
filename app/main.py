@@ -1,18 +1,20 @@
 """FastAPI app: routing and HTTP concerns only.
 
-Deliberately thin: `/predict` wires `preprocessing` -> `inference` together
-and translates their outcomes into HTTP status codes/JSON. All real logic
-(image decoding, resizing, model loading, prediction) lives in
-`app.preprocessing` and `app.inference` so it stays testable without spinning
-up FastAPI. Grad-CAM (`app/gradcam.py`) is intentionally not wired in here
-yet — that's a later issue.
+Deliberately thin: `/predict` wires `preprocessing` -> `inference` ->
+`gradcam` together and translates their outcomes into HTTP status
+codes/JSON. All real logic (image decoding, resizing, model loading,
+prediction, heatmap generation) lives in `app.preprocessing`,
+`app.inference`, and `app.gradcam` so each stays testable without spinning
+up FastAPI.
 """
 
+import base64
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 
+from app.gradcam import generate_gradcam_overlay
 from app.inference import get_model, predict
 from app.preprocessing import ImageDecodeError, preprocess_image_bytes
 
@@ -51,4 +53,14 @@ async def predict_endpoint(file: UploadFile) -> dict:
 
     predicted_class, confidences = await run_in_threadpool(predict, preprocessed)
 
-    return {"predicted_class": predicted_class, "confidences": confidences}
+    model = get_model()
+    heatmap_png_bytes = await run_in_threadpool(
+        generate_gradcam_overlay, model, preprocessed, image_bytes
+    )
+    gradcam_overlay = base64.b64encode(heatmap_png_bytes).decode("ascii")
+
+    return {
+        "predicted_class": predicted_class,
+        "confidences": confidences,
+        "gradcam_overlay": gradcam_overlay,
+    }
