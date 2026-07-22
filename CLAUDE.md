@@ -4,7 +4,7 @@ Guidance for Claude Code (or any collaborator) working in this repo.
 
 ## What this project is
 
-A brain MRI tumor classifier (glioma / meningioma / notumor / pituitary) built as a portfolio piece: a Keras CNN trained in a notebook, served behind a FastAPI backend with Grad-CAM explainability, with a minimal static frontend, deployed on Hugging Face Spaces. Full requirements and the reasoning behind every architectural choice live in `PRD.md` — read that first for the "why." This file is the "how to work in this repo" reference.
+A brain MRI tumor classifier (glioma / meningioma / notumor / pituitary) built as a portfolio piece: a Keras CNN trained in a notebook, served behind a FastAPI backend with Grad-CAM explainability, with a minimal static frontend, deployed on Google Cloud Run. Full requirements and the reasoning behind every architectural choice live in `PRD.md` — read that first for the "why," including the note on why the deploy target moved off Hugging Face Spaces. This file is the "how to work in this repo" reference.
 
 The training notebook (`mri_classifier.ipynb`) already exists and is validated (93.7% test accuracy). Everything else — API, frontend, deployment — is being built from scratch.
 
@@ -16,7 +16,7 @@ This is the target layout. Not everything exists yet — build it out per `PRD.m
 MRI-tumor-Detection-app/
 ├── .github/
 │   └── workflows/
-│       └── sync-to-hf-space.yml   # pushes to the HF Space git remote on every push to main
+│       └── deploy-cloud-run.yml   # builds the image, pushes to Artifact Registry, deploys to Cloud Run on every push to main
 ├── .gitignore
 ├── LICENSE                        # MIT (code license — separate from the CC BY 4.0 dataset license, see below)
 ├── README.md
@@ -74,7 +74,7 @@ Tests:
 pytest tests/
 ```
 
-Docker build (mirrors what HF Spaces runs):
+Docker build (mirrors what Cloud Run runs):
 ```
 docker build -t mri-tumor-app .
 docker run -p 8000:8000 mri-tumor-app
@@ -86,7 +86,7 @@ These came out of an explicit design review (see `PRD.md`) and are easy to accid
 
 - **Preprocessing must use TensorFlow's own ops** (`tf.io.decode_image`, `tf.image.resize(..., method='bilinear')`, `/255.0`), not PIL. The model was trained on images resized via `tf.keras.utils.image_dataset_from_directory`'s internal TF resize — a PIL-based reimplementation uses a different interpolation algorithm and introduces train/serve skew. If you ever touch `app/preprocessing.py`, keep it TF-native.
 - **The model file is never committed to git.** It's hosted on a public Hugging Face Hub model repo and pulled into `app/model/` at **Docker build time**, pinned to a specific commit revision (set in `app/config.py`). Don't add code that downloads it at runtime/startup instead — that adds a network dependency and latency to every cold start. Don't remove the revision pin — an unpinned `main` reference means unrelated code pushes can silently change the live model.
-- **GitHub is the source of truth**, not the Hugging Face Space's git history. Deploys happen via a GitHub Actions workflow pushing to the Space remote on push to `main` — don't manually push to the Space remote out-of-band, or the two will drift.
+- **GitHub is the source of truth**, not any state on Cloud Run. Deploys happen via a GitHub Actions workflow that builds the image, pushes it to Artifact Registry, and deploys a new Cloud Run revision on push to `main` — don't manually `gcloud run deploy` a local build out-of-band, or the two will drift.
 - **Grad-CAM finds its target layer programmatically** (`isinstance(layer, tf.keras.layers.Conv2D)`, last match), not by a hardcoded layer name/index. The model was built with a loop that auto-names layers (`conv2d`, `conv2d_1`, ...) — a hardcoded name breaks silently if the architecture is ever retrained with different args.
 - **Class label order is fixed:** `glioma, meningioma, notumor, pituitary` (alphabetical directory order, matching how `image_dataset_from_directory` assigned indices during training). This must stay in sync between `app/config.py` and whatever produced the model — if the model is ever retrained from different source folders, re-verify this order from the training run's output, don't assume it.
 - **Minimal input validation lives in the `/predict` route itself**, not bolted on later: reject non-image content types and catch decode failures with a clean `400`, so the endpoint never 500s on a bad upload.
@@ -108,4 +108,11 @@ Two separate licenses are in play — don't conflate them:
 
 ## Deployment target
 
-Hugging Face Spaces (Docker SDK), not Render — chosen because Render's free tier's 512MB RAM cap is a real OOM risk for TensorFlow plus this model, while HF Spaces' free CPU tier gives 16GB RAM. If this ever changes, revisit the Dockerfile's base image and the RAM assumption baked into that decision.
+**Google Cloud Run**, not Hugging Face Spaces or Render. Originally scoped for HF Spaces (Docker SDK) over Render, since Render's free tier's 512MB RAM cap is a real OOM risk for TensorFlow plus this model. Switched to Cloud Run mid-implementation when HF started requiring a PRO subscription to create a Docker SDK Space on a personal account (see `PRD.md`'s "Deployment target note" for the full story). Cloud Run runs the same Dockerfile unmodified, has a perpetual free tier with memory configurable well above 512MB (this app runs with `--memory 2Gi --cpu 2`), and scales to zero when idle. It does require a GCP project with billing enabled (a card on file), though usage stays within the free tier at this app's traffic level.
+
+Live service: `mri-tumor-detection-app` in GCP project `project-de2dd266-f732-4323-a80`, region `us-central1`.
+
+**Gotchas hit during first deploy, worth knowing if you ever redeploy manually or debug CI:**
+- `tensorflow-cpu` has no `linux/arm64` wheels for this Python version — if building locally on Apple Silicon, pass `--platform linux/amd64` to `docker build` (Cloud Build's remote builders are x86_64 already, so this only matters for local builds/pushes).
+- This GCP project is new enough that the default Compute Engine service account (`<PROJECT_NUMBER>-compute@developer.gserviceaccount.com`, used by both `gcloud run deploy --source` and Cloud Build) had **zero IAM roles** by default — Google stopped auto-granting it Editor on new projects. It needs `roles/storage.objectViewer` (to read the uploaded build source) and `roles/logging.logWriter` (Cloud Build marks the whole build FAILURE if it can't write its own logs, even if the actual `docker build`/push steps succeeded) at minimum.
+- If `gcloud run deploy --source .` keeps failing in ways that are hard to diagnose, the more reliable path is: build locally (or in CI) with `docker build`, `docker push` to Artifact Registry directly, then `gcloud run deploy --image <pushed-image>` — this sidesteps Cloud Build's default service account entirely.
