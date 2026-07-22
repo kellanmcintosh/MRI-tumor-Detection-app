@@ -17,7 +17,7 @@ CLASS_NAMES = ["glioma", "meningioma", "notumor", "pituitary"]
 # like "main" here, or unrelated pushes to the model repo could silently swap
 # out the live model.
 HF_REPO_ID = "KellanMcintosh/mri-tumor-classifier"
-HF_REVISION = "a35027761d87b4b738d4d8d70efba85266e57f53"
+HF_REVISION = "058ed5400e81f56dd9045a5f8fe554fadd60d9fc"
 HF_MODEL_FILENAME = "tumor_classification_model.keras"
 
 # Local on-disk cache for the downloaded model file. Gitignored (see .gitignore's
