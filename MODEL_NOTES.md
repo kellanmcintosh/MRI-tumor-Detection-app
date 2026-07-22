@@ -3,20 +3,28 @@
 For use in `app/config.py` in a later slice.
 
 - **HF Hub repo id**: `KellanMcintosh/mri-tumor-classifier`
-- **Pinned commit revision**: `a35027761d87b4b738d4d8d70efba85266e57f53`
+- **Pinned commit revision**: `058ed5400e81f56dd9045a5f8fe554fadd60d9fc`
 - **File in repo**: `tumor_classification_model.keras`
 - **Repo URL**: https://huggingface.co/KellanMcintosh/mri-tumor-classifier
 
+## Architecture (this run)
+
+Four Conv2D + MaxPooling blocks (64, 64, 128, 512 filters), with Global Average Pooling
+and Global Max Pooling run in parallel off the last block and concatenated into a
+Dense(128) layer with 0.3 dropout, ending in a 4-way softmax.
+
 ## Training results (this run)
 
-- Training set accuracy: 98.68%
-- Validation set accuracy: 93.93%
-- Test set accuracy: 86.06%
+- Training set accuracy: 99.53%
+- Validation set accuracy: 96.70%
+- Test set accuracy: 92.44%
+- Epochs trained: 72
 
-Test accuracy is below the original notebook's 93.7% baseline — the notebook doesn't fix
-a random seed for model weight initialization (only the train/validation split uses a
-fixed seed), so run-to-run variance is expected. Accepted as-is for now to unblock the
-app/infrastructure work; retraining for a better run is expected later (see GitHub issue #1).
+Test accuracy is slightly below the original notebook's 93.7% baseline, closing most of
+the gap from the previous retrain (86.06%). The notebook doesn't fix a random seed for
+model weight initialization (only the train/validation split uses a fixed seed), so
+run-to-run variance is expected. Pinning a seed to close the remaining gap is still
+tracked as a follow-up (see GitHub issue #1).
 
 ## Reproducing
 

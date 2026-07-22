@@ -36,27 +36,22 @@ def _compute_heatmap(
     """Run a gradient-tracked forward pass and return a normalized [0, 1]
     heatmap over the target conv layer's spatial activations.
 
-    Deliberately replays the model layer-by-layer inside the `GradientTape`
-    context (rather than building a separate `tf.keras.Model` from
-    `target_layer.output` and `model.output`, the textbook Grad-CAM
-    approach) -- that route produced `None` gradients here, likely because a
-    freshly-composed Functional model from an existing Sequential's
-    intermediate tensors doesn't retrace as part of the same tape-tracked
-    call. Manually replaying `model.layers` guarantees the target layer's
-    activations and the final predictions come from one continuous,
-    tape-tracked graph.
+    Builds a sub-model mapping `model.inputs -> [target_layer.output,
+    model.output]` and runs that inside a `GradientTape` -- the standard
+    Grad-CAM approach. This requires the model to be a genuine Functional
+    graph (which it is: `model.layers` here includes branching, e.g. a
+    GlobalAveragePooling2D/GlobalMaxPooling2D split that gets concatenated
+    back together). A naive layer-by-layer replay of `model.layers` was
+    tried previously and abandoned as unnecessary/broken -- it can't
+    represent branches at all, and fails outright on the leading
+    `InputLayer`, which isn't callable the way a regular layer is.
     """
     image_tensor = tf.convert_to_tensor(preprocessed_image)
 
+    grad_model = tf.keras.Model(inputs=model.inputs, outputs=[target_layer.output, model.output])
+
     with tf.GradientTape() as tape:
-        tape.watch(image_tensor)
-        activations = image_tensor
-        conv_output = None
-        for layer in model.layers:
-            activations = layer(activations, training=False)
-            if layer is target_layer:
-                conv_output = activations
-        predictions = activations
+        conv_output, predictions = grad_model(image_tensor, training=False)
         predicted_index = tf.argmax(predictions[0])
         class_score = predictions[:, predicted_index]
 
