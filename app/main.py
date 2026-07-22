@@ -37,6 +37,19 @@ app = FastAPI(title="MRI Tumor Classifier API", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+@app.middleware("http")
+async def no_cache_frontend(request, call_next):
+    # StaticFiles sends ETag/Last-Modified but no Cache-Control, so browsers
+    # fall back to heuristic caching and can serve a stale HTML/CSS/JS build
+    # after a redeploy with no revalidation at all. Force revalidation on
+    # every load instead -- cheap (a 304 if unchanged) and guarantees a
+    # redeploy is picked up on next visit without a manual hard refresh.
+    response = await call_next(request)
+    if request.url.path in ("/", "/about") or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))

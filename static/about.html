@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>About — MRI Tumor Classifier</title>
-  <meta name="description" content="Why this MRI tumor classifier was built, how the pipeline works, and the story of a mid-build platform switch from Hugging Face Spaces to Google Cloud Run." />
+  <meta name="description" content="Why this MRI tumor classifier was built, how the pipeline works, and why deployment moved from Hugging Face Spaces to Google Cloud Run." />
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
@@ -21,11 +21,11 @@
 
   <header class="story-hero">
     <p class="story-eyebrow">About this project</p>
-    <h1>A notebook doesn't prove you can <em>ship</em>.</h1>
+    <h1>From notebook to deployed <em>API</em>.</h1>
     <p class="story-lede">
       This app takes a brain MRI, classifies it as glioma, meningioma, pituitary, or no tumor,
       and shows a Grad-CAM heatmap of what the model actually looked at. Here's why it exists,
-      how the pipeline works, and the mid-build platform switch that nearly derailed it.
+      how the pipeline works, and why the deployment target changed partway through the build.
     </p>
   </header>
 
@@ -36,22 +36,21 @@
       <p>
         The model started as a Jupyter notebook: a small CNN trained on brain MRI scans to
         tell four classes apart, run cell-by-cell on a personal machine until it hit a
-        respectable test accuracy. That's a fine way to learn, but it doesn't demonstrate
-        much beyond "I can write Python in a notebook." Nobody can open a link and try it.
-        There's no API, no deployment, no failure handling &mdash; none of the things that
-        separate a modeling exercise from a shipped application.
+        respectable test accuracy. That's useful for validating an approach, but a notebook
+        on its own has no API, no deployment, and no failure handling &mdash; nobody can open
+        a link and try it.
       </p>
       <p>
-        This project is that notebook turned into something a recruiter, another developer,
+        This project turns that notebook into something a recruiter, another developer,
         or anyone with a browser can actually use: a FastAPI backend serving real-time
         inference, a Grad-CAM layer so the prediction isn't a black box, and a deployment
         pipeline where pushing to <code>main</code> is the only way the live app changes.
       </p>
       <p>
-        There's a twist worth admitting: <strong>the original trained model file was lost.</strong>
-        The save path and the environment that produced it were both gone by the time this
-        build started, so step zero wasn't "wire up the API" &mdash; it was retraining the
-        notebook from scratch to get a usable model artifact back.
+        Worth noting: <strong>the original trained model file was lost</strong> &mdash; the
+        save path and the environment that produced it were both gone by the time this build
+        started. So the first step wasn't wiring up the API; it was retraining the notebook
+        from scratch to get a usable model artifact back.
       </p>
     </div>
   </section>
@@ -61,8 +60,9 @@
     <div class="story-body">
       <h2>How it works</h2>
       <p>
-        The network is deliberately simple: three Conv2D + MaxPooling blocks (64 / 64 / 128
-        filters), flattened into a Dense(128, ReLU) layer with dropout, ending in a 4-way
+        The network uses four Conv2D + MaxPooling blocks (64 / 64 / 128 / 512 filters). The
+        last block feeds both Global Average Pooling and Global Max Pooling in parallel,
+        concatenated together into a Dense(128) layer with 0.3 dropout, ending in a 4-way
         softmax. Trained on the Kaggle <em>brain-tumor-mri-dataset</em> at 256&times;256
         resolution. Nothing exotic &mdash; the point of this build was never a state-of-the-art
         architecture, it was proving the surrounding engineering.
@@ -76,34 +76,30 @@
       </ol>
 
       <p>
-        On honesty: the training notebook doesn't fix a random seed for weight initialization
-        (only the train/validation split is seeded), so accuracy varies a little between runs.
-        The deployed model's numbers, from the run actually hosting the live app:
+        The training notebook doesn't fix a random seed for weight initialization (only the
+        train/validation split is seeded), so accuracy varies a little between runs. These
+        are the numbers from the run actually hosting the live app, not a cherry-picked one:
       </p>
 
       <div class="stat-row">
         <div class="stat-cell">
-          <div class="stat-value">98.7%</div>
+          <div class="stat-value">99.5%</div>
           <div class="stat-label">Train accuracy</div>
         </div>
         <div class="stat-cell">
-          <div class="stat-value">93.9%</div>
+          <div class="stat-value">96.7%</div>
           <div class="stat-label">Validation accuracy</div>
         </div>
         <div class="stat-cell">
-          <div class="stat-value">86.1%</div>
+          <div class="stat-value">92.4%</div>
           <div class="stat-label">Test accuracy</div>
         </div>
       </div>
 
-      <p class="pull-quote">
-        A worse-looking number that's true beats a better-looking number you can't reproduce.
-      </p>
-
       <p>
-        That test figure is below the original notebook's 93.7%, and it's reported here
-        rather than quietly swapped for the better-sounding one. Re-running training with a
-        fixed seed to close that gap is tracked as a follow-up, not smoothed over.
+        This is a retrained run on an updated architecture, and it closed most of the gap to
+        the original notebook's 93.7% test accuracy. Re-running training with a fixed seed to
+        pin down run-to-run variance is tracked as a follow-up.
       </p>
     </div>
   </section>
@@ -140,9 +136,9 @@
   </section>
 
   <section class="story-section" id="deploy">
-    <div class="story-section-label"><span>04</span>The detour</div>
+    <div class="story-section-label"><span>04</span>Deployment</div>
     <div class="story-body">
-      <h2>A deployment plan that changed mid-build</h2>
+      <h2>Switching from Hugging Face Spaces to Cloud Run</h2>
       <p>
         The original plan was Hugging Face Spaces on its free Docker SDK tier &mdash; a
         natural fit, since the model was already going to live on the HF Hub. Mid-build,
