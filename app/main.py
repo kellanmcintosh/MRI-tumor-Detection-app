@@ -42,6 +42,11 @@ def index() -> FileResponse:
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 
+@app.get("/about")
+def about() -> FileResponse:
+    return FileResponse(os.path.join(STATIC_DIR, "about.html"))
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}

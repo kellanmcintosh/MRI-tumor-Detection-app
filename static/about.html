@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>About — MRI Tumor Classifier</title>
+  <meta name="description" content="Why this MRI tumor classifier was built, how the pipeline works, and the story of a mid-build platform switch from Hugging Face Spaces to Google Cloud Run." />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="ruler" aria-hidden="true"></div>
+
+  <nav class="topnav" aria-label="Primary">
+    <span></span>
+    <div class="topnav-links">
+      <a href="/">Classifier</a>
+      <a href="/about" aria-current="page">About</a>
+      <a class="external" href="https://github.com/kellanmcintosh/MRI-tumor-Detection-app" target="_blank" rel="noopener">Source</a>
+    </div>
+  </nav>
+
+  <header class="story-hero">
+    <p class="story-eyebrow">About this project</p>
+    <h1>A notebook doesn't prove you can <em>ship</em>.</h1>
+    <p class="story-lede">
+      This app takes a brain MRI, classifies it as glioma, meningioma, pituitary, or no tumor,
+      and shows a Grad-CAM heatmap of what the model actually looked at. Here's why it exists,
+      how the pipeline works, and the mid-build platform switch that nearly derailed it.
+    </p>
+  </header>
+
+  <section class="story-section" id="why">
+    <div class="story-section-label"><span>01</span>Origin</div>
+    <div class="story-body">
+      <h2>Why this exists</h2>
+      <p>
+        The model started as a Jupyter notebook: a small CNN trained on brain MRI scans to
+        tell four classes apart, run cell-by-cell on a personal machine until it hit a
+        respectable test accuracy. That's a fine way to learn, but it doesn't demonstrate
+        much beyond "I can write Python in a notebook." Nobody can open a link and try it.
+        There's no API, no deployment, no failure handling &mdash; none of the things that
+        separate a modeling exercise from a shipped application.
+      </p>
+      <p>
+        This project is that notebook turned into something a recruiter, another developer,
+        or anyone with a browser can actually use: a FastAPI backend serving real-time
+        inference, a Grad-CAM layer so the prediction isn't a black box, and a deployment
+        pipeline where pushing to <code>main</code> is the only way the live app changes.
+      </p>
+      <p>
+        There's a twist worth admitting: <strong>the original trained model file was lost.</strong>
+        The save path and the environment that produced it were both gone by the time this
+        build started, so step zero wasn't "wire up the API" &mdash; it was retraining the
+        notebook from scratch to get a usable model artifact back.
+      </p>
+    </div>
+  </section>
+
+  <section class="story-section" id="model">
+    <div class="story-section-label"><span>02</span>The model</div>
+    <div class="story-body">
+      <h2>How it works</h2>
+      <p>
+        The network is deliberately simple: three Conv2D + MaxPooling blocks (64 / 64 / 128
+        filters), flattened into a Dense(128, ReLU) layer with dropout, ending in a 4-way
+        softmax. Trained on the Kaggle <em>brain-tumor-mri-dataset</em> at 256&times;256
+        resolution. Nothing exotic &mdash; the point of this build was never a state-of-the-art
+        architecture, it was proving the surrounding engineering.
+      </p>
+
+      <ol class="pipeline">
+        <li><strong>Decode &amp; resize</strong><span>The uploaded image is decoded and resized using TensorFlow's own ops &mdash; not PIL. The model was trained on TF's internal resize behavior, and a PIL reimplementation uses different interpolation, which quietly skews accuracy between training and serving.</span></li>
+        <li><strong>Normalize</strong><span>Pixels are rescaled to a 0&ndash;1 float range, matching training preprocessing exactly.</span></li>
+        <li><strong>Predict</strong><span>The CNN, loaded once at process startup, returns a class label plus a confidence score for all four classes &mdash; not just the top guess.</span></li>
+        <li><strong>Explain</strong><span>Grad-CAM finds the model's last convolutional layer programmatically (never a hardcoded layer name), traces gradients back through it, and overlays a heatmap so you can see what drove the call.</span></li>
+      </ol>
+
+      <p>
+        On honesty: the training notebook doesn't fix a random seed for weight initialization
+        (only the train/validation split is seeded), so accuracy varies a little between runs.
+        The deployed model's numbers, from the run actually hosting the live app:
+      </p>
+
+      <div class="stat-row">
+        <div class="stat-cell">
+          <div class="stat-value">98.7%</div>
+          <div class="stat-label">Train accuracy</div>
+        </div>
+        <div class="stat-cell">
+          <div class="stat-value">93.9%</div>
+          <div class="stat-label">Validation accuracy</div>
+        </div>
+        <div class="stat-cell">
+          <div class="stat-value">86.1%</div>
+          <div class="stat-label">Test accuracy</div>
+        </div>
+      </div>
+
+      <p class="pull-quote">
+        A worse-looking number that's true beats a better-looking number you can't reproduce.
+      </p>
+
+      <p>
+        That test figure is below the original notebook's 93.7%, and it's reported here
+        rather than quietly swapped for the better-sounding one. Re-running training with a
+        fixed seed to close that gap is tracked as a follow-up, not smoothed over.
+      </p>
+    </div>
+  </section>
+
+  <section class="story-section" id="stack">
+    <div class="story-section-label"><span>03</span>Under the hood</div>
+    <div class="story-body">
+      <h2>Architecture</h2>
+      <p>
+        The backend is split into small, independently testable modules rather than one
+        monolithic route handler: preprocessing (bytes in, normalized array out), inference
+        (array in, prediction out), and Grad-CAM (array in, heatmap out). The FastAPI route
+        layer just wires them together and translates failures into clean HTTP errors &mdash;
+        a bad upload returns a <code>400</code>, never an unhandled crash.
+      </p>
+      <p>
+        The trained <code>.keras</code> file itself never touches git. It's hosted on a public
+        Hugging Face Hub model repo and pulled into the Docker image at <strong>build time</strong>,
+        pinned to a specific commit revision &mdash; so an unrelated code change can never
+        silently swap the live model, and the running container has zero runtime dependency
+        on Hub availability.
+      </p>
+      <div class="chip-row">
+        <span class="chip">TensorFlow / Keras</span>
+        <span class="chip">FastAPI</span>
+        <span class="chip">Grad-CAM</span>
+        <span class="chip">Docker</span>
+        <span class="chip">GitHub Actions</span>
+        <span class="chip">Google Cloud Run</span>
+        <span class="chip">Hugging Face Hub</span>
+        <span class="chip">Vanilla JS frontend</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="story-section" id="deploy">
+    <div class="story-section-label"><span>04</span>The detour</div>
+    <div class="story-body">
+      <h2>A deployment plan that changed mid-build</h2>
+      <p>
+        The original plan was Hugging Face Spaces on its free Docker SDK tier &mdash; a
+        natural fit, since the model was already going to live on the HF Hub. Mid-build,
+        Hugging Face changed policy to require a PRO subscription to create a Docker SDK
+        Space on a personal account, even on free CPU hardware. Paying a subscription fee
+        for a portfolio demo didn't make sense, so the deploy target moved.
+      </p>
+      <p>
+        <strong>Google Cloud Run</strong> ended up a better fit anyway: it runs the exact
+        same Dockerfile unmodified, its free tier's memory ceiling is well above what
+        TensorFlow needs (this app runs at 2&nbsp;GiB / 2&nbsp;vCPU), and it scales to zero
+        when nobody's using it. The only cost is a GCP billing account on file &mdash; no
+        recurring charge at this app's traffic level.
+      </p>
+      <p>
+        GitHub stays the single source of truth throughout: a GitHub Actions workflow builds
+        the image, pushes it to Artifact Registry, and deploys a new Cloud Run revision on
+        every push to <code>main</code>. Nothing gets deployed by hand.
+      </p>
+    </div>
+  </section>
+
+  <section class="story-section" id="dataset">
+    <div class="story-section-label"><span>05</span>Credit</div>
+    <div class="story-body">
+      <h2>Dataset &amp; license</h2>
+      <p>
+        Trained on Kaggle's <a href="https://www.kaggle.com/datasets/masoudnickparvar/brain-tumor-mri-dataset" target="_blank" rel="noopener">brain-tumor-mri-dataset</a>,
+        created by Msoud Nickparvar and licensed <strong>CC BY 4.0</strong> &mdash; itself a
+        combination of the Figshare, SARTAJ, and Br35H datasets. That license requires
+        attribution, which is why it's credited here, in the README, and on the
+        <a href="https://huggingface.co/KellanMcintosh/mri-tumor-classifier" target="_blank" rel="noopener">Hugging Face model card</a>.
+        The application code itself is MIT-licensed.
+      </p>
+    </div>
+  </section>
+
+  <section class="story-cta">
+    <div class="story-cta-panel">
+      <span class="bracket tl" aria-hidden="true"></span>
+      <span class="bracket br" aria-hidden="true"></span>
+      <h2>See it read a scan</h2>
+      <p>Upload an MRI and watch the pipeline above run end to end, heatmap included.</p>
+      <a class="btn btn-primary" href="/">Try the classifier</a>
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    <p>
+      Built as a portfolio project &mdash; model trained on the Kaggle
+      <em>brain&#8209;tumor&#8209;mri&#8209;dataset</em>. See the
+      <a href="https://github.com/kellanmcintosh/MRI-tumor-Detection-app" target="_blank" rel="noopener">source on GitHub</a>.
+    </p>
+  </footer>
+</body>
+</html>

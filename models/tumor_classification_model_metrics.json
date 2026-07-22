@@ -1,0 +1,8 @@
+{
+  "trained_at": "2026-07-22T12:31:29",
+  "train_accuracy": 0.9953125,
+  "val_accuracy": 0.9669642857142857,
+  "test_accuracy": 0.924375,
+  "epochs_trained": 72,
+  "architecture": "4 conv blocks (64, 64, 128, 512 filters) -> concatenated GlobalAveragePooling2D + GlobalMaxPooling2D -> Dense(128) -> Dropout(0.3)"
+}
