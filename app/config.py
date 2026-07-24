@@ -12,7 +12,7 @@ IMG_SIZE = 256
 
 CLASS_NAMES = ["glioma", "meningioma", "notumor", "pituitary"]
 
-# Hugging Face Hub location of the trained model artifact (see MODEL_NOTES.md).
+# Hugging Face Hub location of the trained model artifact (see docs/MODEL_NOTES.md).
 # Pinned to a specific commit revision on purpose — never track a mutable ref
 # like "main" here, or unrelated pushes to the model repo could silently swap
 # out the live model.

@@ -4,13 +4,13 @@ Guidance for Claude Code (or any collaborator) working in this repo.
 
 ## What this project is
 
-A brain MRI tumor classifier (glioma / meningioma / notumor / pituitary) built as a portfolio piece: a Keras CNN trained in a notebook, served behind a FastAPI backend with Grad-CAM explainability, with a minimal static frontend, deployed on Google Cloud Run. Full requirements and the reasoning behind every architectural choice live in `PRD.md` — read that first for the "why," including the note on why the deploy target moved off Hugging Face Spaces. This file is the "how to work in this repo" reference.
+A brain MRI tumor classifier (glioma / meningioma / notumor / pituitary) built as a portfolio piece: a Keras CNN trained in a notebook, served behind a FastAPI backend with Grad-CAM explainability, with a minimal static frontend, deployed on Google Cloud Run. Full requirements and the reasoning behind every architectural choice live in `docs/PRD.md` — read that first for the "why," including the note on why the deploy target moved off Hugging Face Spaces. This file is the "how to work in this repo" reference.
 
 The training notebook (`mri_classifier.ipynb`) already exists and is validated (93.7% test accuracy). Everything else — API, frontend, deployment — is being built from scratch.
 
 ## Repo structure
 
-This is the target layout. Not everything exists yet — build it out per `PRD.md`'s phases.
+This is the target layout. Not everything exists yet — build it out per `docs/PRD.md`'s phases.
 
 ```
 MRI-tumor-Detection-app/
@@ -20,8 +20,11 @@ MRI-tumor-Detection-app/
 ├── .gitignore
 ├── LICENSE                        # MIT (code license — separate from the CC BY 4.0 dataset license, see below)
 ├── README.md
-├── PRD.md
 ├── CLAUDE.md
+├── docs/
+│   ├── PRD.md                     # full requirements + architectural reasoning — read first for the "why"
+│   ├── MODEL_NOTES.md             # HF Hub model reference: pinned revision, architecture, training results
+│   └── MODEL_ACCURACY_INVESTIGATION.md  # record of the meningioma-recall / CPU-vs-GPU accuracy investigation
 ├── Dockerfile                     # builds the deployed image; downloads the pinned model from HF Hub at build time
 ├── requirements-train.txt         # full deps for local retraining (tensorflow, opencv-python, pandas, matplotlib, scikit-learn, pillow, kaggle)
 ├── requirements-api.txt           # lean deps for the deployed container (tensorflow-cpu, fastapi, uvicorn, python-multipart, numpy)
@@ -82,7 +85,7 @@ docker run -p 8000:8000 mri-tumor-app
 
 ## Architecture decisions that must not get silently violated
 
-These came out of an explicit design review (see `PRD.md`) and are easy to accidentally regress:
+These came out of an explicit design review (see `docs/PRD.md`) and are easy to accidentally regress:
 
 - **Preprocessing must use TensorFlow's own ops** (`tf.io.decode_image`, `tf.image.resize(..., method='bilinear')`, `/255.0`), not PIL. The model was trained on images resized via `tf.keras.utils.image_dataset_from_directory`'s internal TF resize — a PIL-based reimplementation uses a different interpolation algorithm and introduces train/serve skew. If you ever touch `app/preprocessing.py`, keep it TF-native.
 - **The model file is never committed to git.** It's hosted on a public Hugging Face Hub model repo and pulled into `app/model/` at **Docker build time**, pinned to a specific commit revision (set in `app/config.py`). Don't add code that downloads it at runtime/startup instead — that adds a network dependency and latency to every cold start. Don't remove the revision pin — an unpinned `main` reference means unrelated code pushes can silently change the live model.
@@ -108,7 +111,7 @@ Two separate licenses are in play — don't conflate them:
 
 ## Deployment target
 
-**Google Cloud Run**, not Hugging Face Spaces or Render. Originally scoped for HF Spaces (Docker SDK) over Render, since Render's free tier's 512MB RAM cap is a real OOM risk for TensorFlow plus this model. Switched to Cloud Run mid-implementation when HF started requiring a PRO subscription to create a Docker SDK Space on a personal account (see `PRD.md`'s "Deployment target note" for the full story). Cloud Run runs the same Dockerfile unmodified, has a perpetual free tier with memory configurable well above 512MB (this app runs with `--memory 2Gi --cpu 2`), and scales to zero when idle. It does require a GCP project with billing enabled (a card on file), though usage stays within the free tier at this app's traffic level.
+**Google Cloud Run**, not Hugging Face Spaces or Render. Originally scoped for HF Spaces (Docker SDK) over Render, since Render's free tier's 512MB RAM cap is a real OOM risk for TensorFlow plus this model. Switched to Cloud Run mid-implementation when HF started requiring a PRO subscription to create a Docker SDK Space on a personal account (see `docs/PRD.md`'s "Deployment target note" for the full story). Cloud Run runs the same Dockerfile unmodified, has a perpetual free tier with memory configurable well above 512MB (this app runs with `--memory 2Gi --cpu 2`), and scales to zero when idle. It does require a GCP project with billing enabled (a card on file), though usage stays within the free tier at this app's traffic level.
 
 Live service: `mri-tumor-detection-app` in GCP project `project-de2dd266-f732-4323-a80`, region `us-central1`.
 
