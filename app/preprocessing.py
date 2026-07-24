@@ -25,7 +25,7 @@ def content_bounding_box_crop(image: tf.Tensor, threshold: float = 10.0) -> tf.T
     fixed size should resize the result themselves; `crop_to_content` below
     does that for the model input path.
 
-    Grad-CAM investigation (see MODEL_NOTES.md) showed the model heavily
+    Grad-CAM investigation (see docs/MODEL_NOTES.md) showed the model heavily
     keying off the black background rather than brain tissue -- a known
     shortcut-learning risk with this dataset (it merges three source
     datasets with different backgrounds/cropping per class). The bounding
