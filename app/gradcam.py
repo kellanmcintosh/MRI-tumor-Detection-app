@@ -15,6 +15,8 @@ See CLAUDE.md's "Architecture decisions" section.
 import numpy as np
 import tensorflow as tf
 
+from app.preprocessing import content_bounding_box_crop
+
 
 class GradCAMError(RuntimeError):
     """Raised when a Grad-CAM heatmap cannot be produced for a given model."""
@@ -32,6 +34,7 @@ def _compute_heatmap(
     model: tf.keras.Model,
     preprocessed_image: tf.Tensor,
     target_layer: tf.keras.layers.Layer,
+    target_class_index: int,
 ) -> np.ndarray:
     """Run a gradient-tracked forward pass and return a normalized [0, 1]
     heatmap over the target conv layer's spatial activations.
@@ -45,6 +48,17 @@ def _compute_heatmap(
     tried previously and abandoned as unnecessary/broken -- it can't
     represent branches at all, and fails outright on the leading
     `InputLayer`, which isn't callable the way a regular layer is.
+
+    `target_class_index` must be the same class `app.inference.predict`
+    already returned to the caller, not re-derived from this function's own
+    forward pass. An earlier version called `tf.argmax` on `predictions`
+    here independently of `inference.predict`'s own `model.predict` call --
+    two separate forward passes through identical weights that can still
+    disagree at the margin (float non-determinism between separate calls,
+    the same class of issue as the tf.cond/tensorflow-metal hang noted in
+    `app.preprocessing`), which silently produced a heatmap explaining a
+    different class than the one returned as `predicted_class`. Taking the
+    index as a parameter makes that mismatch structurally impossible.
     """
     image_tensor = tf.convert_to_tensor(preprocessed_image)
 
@@ -52,8 +66,7 @@ def _compute_heatmap(
 
     with tf.GradientTape() as tape:
         conv_output, predictions = grad_model(image_tensor, training=False)
-        predicted_index = tf.argmax(predictions[0])
-        class_score = predictions[:, predicted_index]
+        class_score = predictions[:, target_class_index]
 
     grads = tape.gradient(class_score, conv_output)
     if grads is None:
@@ -91,6 +104,7 @@ def generate_gradcam_overlay(
     model: tf.keras.Model,
     preprocessed_image: tf.Tensor,
     original_image_bytes: bytes,
+    target_class_index: int,
     alpha: float = 0.4,
 ) -> bytes:
     """Produce a Grad-CAM heatmap alpha-blended over the original uploaded image.
@@ -102,10 +116,18 @@ def generate_gradcam_overlay(
             array used for inference, as produced by
             `app.preprocessing.preprocess_image_bytes`. Used to run the
             gradient-tracked forward pass through the model.
-        original_image_bytes: the raw uploaded image bytes. Used only to
-            recover the original resolution and pixel data, so the overlay
-            is rendered at the uploaded image's native size rather than the
-            downscaled 256x256 model input.
+        original_image_bytes: the raw uploaded image bytes. Cropped the same
+            way as the model input (see `app.preprocessing.crop_to_content`)
+            so the overlay reflects exactly what the model saw -- otherwise
+            the heatmap would misalign onto background the model never
+            looked at once cropping was introduced. Rendered at the crop's
+            native resolution, not the downscaled 256x256 model input.
+        target_class_index: index into `app.config.CLASS_NAMES` of the class
+            to explain -- must be the same class index `app.inference.predict`
+            returned as `predicted_class` for this same request, so the
+            heatmap can never explain a different class than the one the API
+            reports (see `_compute_heatmap`'s docstring for why this can't be
+            re-derived independently here).
         alpha: blend strength of the heatmap colormap over the original
             image, in `[0, 1]`. Higher values make the heatmap more opaque.
 
@@ -118,9 +140,10 @@ def generate_gradcam_overlay(
             not be computed for the target layer.
     """
     target_layer = _find_last_conv_layer(model)
-    heatmap = _compute_heatmap(model, preprocessed_image, target_layer)
+    heatmap = _compute_heatmap(model, preprocessed_image, target_layer, target_class_index)
 
     original_image = tf.io.decode_image(original_image_bytes, channels=3, expand_animations=False)
+    original_image = content_bounding_box_crop(tf.cast(original_image, tf.float32))
     height, width = original_image.shape[0], original_image.shape[1]
 
     heatmap_resized = tf.image.resize(heatmap[..., tf.newaxis], [height, width], method="bilinear")

@@ -17,6 +17,11 @@ import tensorflow as tf
 
 from app.config import CLASS_NAMES, MODEL_PATH
 
+# Registers the custom RandomErasing layer baked into the model so
+# load_model can deserialize it below -- unused directly in this module,
+# but the import itself is what triggers the registration.
+from app import model_layers  # noqa: F401
+
 
 @lru_cache(maxsize=1)
 def get_model() -> tf.keras.Model:

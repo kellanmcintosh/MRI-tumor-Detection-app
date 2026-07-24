@@ -6,7 +6,10 @@ no mocks, per CLAUDE.md's testing conventions.
 Grad-CAM correctness (whether the heatmap highlights the "right" region) is
 intentionally not asserted here — see CLAUDE.md's testing conventions. The
 `gradcam_overlay` field is only checked for well-formedness: valid base64
-that decodes to a PNG image with the original upload's dimensions.
+that decodes to a 3-channel PNG. It won't match the original upload's exact
+dimensions — the overlay is cropped to content the same way the model input
+is (see `app.preprocessing.crop_to_content`), so the heatmap aligns with
+what the model actually saw.
 """
 
 import base64
@@ -61,9 +64,11 @@ def test_predict_response_shape(client, sample_image_bytes):
 
 
 def test_predict_gradcam_overlay_is_well_formed_image(client, sample_image_bytes):
-    """The `gradcam_overlay` field must be valid base64 that decodes to a PNG
-    image matching the original upload's dimensions. Whether the heatmap
-    itself is "correct" is intentionally not asserted — see CLAUDE.md.
+    """The `gradcam_overlay` field must be valid base64 that decodes to a
+    well-formed 3-channel PNG, no bigger than the original upload (it's
+    cropped to content, so it should be smaller or equal, never larger).
+    Whether the heatmap itself is "correct" is intentionally not asserted —
+    see CLAUDE.md.
     """
     image_bytes = sample_image_bytes("pituitary")
 
@@ -79,7 +84,9 @@ def test_predict_gradcam_overlay_is_well_formed_image(client, sample_image_bytes
     overlay_image = tf.io.decode_png(overlay_bytes, channels=3)
     original_image = tf.io.decode_image(image_bytes, channels=3, expand_animations=False)
 
-    assert overlay_image.shape == original_image.shape
+    assert overlay_image.shape[2] == 3
+    assert overlay_image.shape[0] <= original_image.shape[0]
+    assert overlay_image.shape[1] <= original_image.shape[1]
 
 
 def test_predict_matches_known_label_glioma(client, sample_image_bytes):

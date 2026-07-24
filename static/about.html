@@ -101,6 +101,64 @@
         the original notebook's 93.7% test accuracy. Re-running training with a fixed seed to
         pin down run-to-run variance is tracked as a follow-up.
       </p>
+
+      <p>
+        Aggregate accuracy hides where a model actually struggles, so here's the full
+        breakdown on the 1,600-image test set: rows are the true label, columns are what the
+        model predicted.
+      </p>
+
+      <div class="confusion-matrix-wrap">
+        <table class="confusion-matrix">
+          <caption>Test set confusion matrix (400 images per class)</caption>
+          <thead>
+            <tr>
+              <th scope="col"></th>
+              <th scope="col">Pred. glioma</th>
+              <th scope="col">Pred. meningioma</th>
+              <th scope="col">Pred. notumor</th>
+              <th scope="col">Pred. pituitary</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">True glioma</th>
+              <td class="diag" style="--intensity: 0.31">310</td>
+              <td style="--intensity: 0.054">54</td>
+              <td style="--intensity: 0.031">31</td>
+              <td style="--intensity: 0.005">5</td>
+            </tr>
+            <tr>
+              <th scope="row">True meningioma</th>
+              <td style="--intensity: 0.013">13</td>
+              <td class="diag" style="--intensity: 0.37">370</td>
+              <td style="--intensity: 0.012">12</td>
+              <td style="--intensity: 0.005">5</td>
+            </tr>
+            <tr>
+              <th scope="row">True notumor</th>
+              <td style="--intensity: 0">0</td>
+              <td style="--intensity: 0">0</td>
+              <td class="diag" style="--intensity: 0.4">400</td>
+              <td style="--intensity: 0">0</td>
+            </tr>
+            <tr>
+              <th scope="row">True pituitary</th>
+              <td style="--intensity: 0">0</td>
+              <td style="--intensity: 0.001">1</td>
+              <td style="--intensity: 0">0</td>
+              <td class="diag" style="--intensity: 0.399">399</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        <em>notumor</em> and <em>pituitary</em> are classified almost perfectly. The model's
+        real blind spot is telling <em>glioma</em> and <em>meningioma</em> apart: 54 glioma
+        scans (13.5%) were called meningioma, and 13 meningioma scans were called glioma
+        &mdash; together most of the errors on the whole test set.
+      </p>
     </div>
   </section>
 
