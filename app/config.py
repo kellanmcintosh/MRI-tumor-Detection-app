@@ -17,7 +17,13 @@ CLASS_NAMES = ["glioma", "meningioma", "notumor", "pituitary"]
 # like "main" here, or unrelated pushes to the model repo could silently swap
 # out the live model.
 HF_REPO_ID = "KellanMcintosh/mri-tumor-classifier"
-HF_REVISION = "058ed5400e81f56dd9045a5f8fe554fadd60d9fc"
+# Was "058ed5400e81f56dd9045a5f8fe554fadd60d9fc" -- that revision (and the
+# next commit after it, 28cd87a0) both accidentally contained the pre-retrain
+# model despite being labeled as the retrain, because the original upload
+# pushed the wrong local file. This revision (bd404594) was verified by hash
+# to actually contain the retrained model (train 99.53%/val 96.70%/test
+# 92.44%) -- see MODEL_ACCURACY_INVESTIGATION.md.
+HF_REVISION = "bd4045947697284c629d5f2e5a261609f1bab691"
 HF_MODEL_FILENAME = "tumor_classification_model.keras"
 
 # Local on-disk cache for the downloaded model file. Gitignored (see .gitignore's

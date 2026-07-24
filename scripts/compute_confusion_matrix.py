@@ -17,11 +17,16 @@ import numpy as np
 import tensorflow as tf
 from sklearn.metrics import confusion_matrix
 
-from app.config import CLASS_NAMES
+from app.config import CLASS_NAMES, MODEL_PATH
+
+# Registers the custom RandomErasing layer baked into the model so
+# load_model can deserialize it below -- unused directly in this module,
+# but the import itself is what triggers the registration (same reason
+# app/inference.py imports this).
+from app import model_layers  # noqa: F401
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEST_DIR = os.path.join(REPO_ROOT, "data", "Testing")
-MODEL_PATH = os.path.join(REPO_ROOT, "models", "tumor_classification_model.keras")
 METRICS_PATH = os.path.join(REPO_ROOT, "models", "tumor_classification_model_metrics.json")
 
 

@@ -3,9 +3,14 @@
 For use in `app/config.py` in a later slice.
 
 - **HF Hub repo id**: `KellanMcintosh/mri-tumor-classifier`
-- **Pinned commit revision**: `058ed5400e81f56dd9045a5f8fe554fadd60d9fc`
+- **Pinned commit revision**: `bd4045947697284c629d5f2e5a261609f1bab691`
 - **File in repo**: `tumor_classification_model.keras`
 - **Repo URL**: https://huggingface.co/KellanMcintosh/mri-tumor-classifier
+
+Previously pinned to `058ed5400e81f56dd9045a5f8fe554fadd60d9fc`, which despite its
+commit message actually contained the pre-retrain model (upload bug) — see
+`MODEL_ACCURACY_INVESTIGATION.md`'s "RESOLVED: production was serving the wrong
+model file" section for the full story.
 
 ## Architecture (this run)
 

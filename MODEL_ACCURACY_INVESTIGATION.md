@@ -1,10 +1,71 @@
 # Model accuracy investigation (2026-07-24)
 
-Findings from debugging why the deployed model performs poorly on meningioma, and a
-separate, more consequential discovery made while verifying a proposed fix: **this
-model's measured accuracy depends materially on whether it's served from CPU or
-GPU.** Nothing in this doc has been acted on yet (no promotion, no code changes) —
-it's a record of what's been found so a future session doesn't have to re-derive it.
+Findings from debugging why the deployed model performs poorly on meningioma, a
+separate discovery made while verifying a proposed fix (this model's measured
+accuracy depends materially on whether it's served from CPU or GPU, root-caused
+below to a `tensorflow-metal` graph-mode bug), and finally the actual production
+incident that prompted the most urgent part of this work — see "RESOLVED: production
+was serving the wrong model file" below, which is the fix that was actually shipped.
+
+## RESOLVED: production was serving the wrong model file (2026-07-24)
+
+**This was the real cause of production giving wrong predictions on essentially
+every request** (a user report of "every single prediction wrong," far worse than
+anything the CPU/GPU divergence below could explain) — not a numerics or
+architecture issue at all, and not related to the CPU/GPU divergence section below.
+
+**Root cause:** `app/config.py`'s `HF_REVISION` was pinned to
+`058ed5400e81f56dd9045a5f8fe554fadd60d9fc` on the `KellanMcintosh/mri-tumor-classifier`
+Hugging Face Hub repo. That commit's message reads "Retrain: train 99.53% / val
+96.70% / test 92.44%..." (the retrained model's real numbers) — but the file it
+actually contains, verified by SHA-256, is `2255b19a...`, the **pre-retrain model**
+(same file as local `models/tumor_classification_model.keras`), not the retrained
+`models/tumor_classification_model_v2.keras` (`92e9e768...`) the commit message
+claims. A second commit one second later (`28cd87a0`, same message) has the same
+wrong file. The original upload script pushed the wrong local path to the Hub —
+twice — while labeling both commits with the new model's metrics. This was never
+caught because local testing/investigation (including earlier in this doc) checked
+the hash of `app/model/tumor_classification_model.keras` on a dev machine where that
+file had, at some point, been manually placed/replaced with the correct model for
+local testing — masking the fact that a fresh `scripts/download_model.py` run (what
+Docker build time, and therefore Cloud Run, actually does) pulls the wrong file.
+The pre-retrain model was also never trained with `crop_to_content` in its input
+pipeline (added later, see "Background" below), so feeding it the current
+(cropped) preprocessing made results considerably worse than even the pre-retrain
+model's own original numbers would suggest.
+
+**How this was found:** re-investigating a user report of catastrophic live
+production failure, initially (incorrectly) suspected as an x86-vs-ARM CPU
+numerics issue, since `docker build --platform linux/amd64` (matching Cloud Run
+exactly) reproduced the bad predictions while every manually-substituted-correct-
+model test on the same architecture scored normally. Bisecting *why* those two
+things differed (rather than assuming it was the architecture) led to comparing
+file hashes between what `scripts/download_model.py` actually fetches (fresh, via
+the real pinned revision) versus what happened to already be sitting in
+`app/model/` locally — which is when the hash mismatch surfaced. In hindsight the
+"x86 collapse" was a coincidence of which code path happened to touch which file,
+not a real architecture-specific bug; once the correct model was used, x86 and ARM
+CPU gave consistent results (batch size and threading were also ruled out as
+factors during this process).
+
+**Fix applied:**
+1. Uploaded the correct file (`models/tumor_classification_model_v2.keras`,
+   `92e9e768...`) to the Hub as a new commit (`bd4045947697284c629d5f2e5a261609f1bab691`),
+   verified by fresh download + hash check.
+2. Updated `app/config.py`'s `HF_REVISION` to that commit.
+3. Verified end-to-end: rebuilt the actual production Docker image
+   (`--platform linux/amd64`, identical to what Cloud Run runs), ran the real
+   `app.inference.predict()` path against the full 1600-image Kaggle test set
+   inside that container — **88.06% overall accuracy, 85.25%/67.25%/100%/99.75%
+   recall (glioma/meningioma/notumor/pituitary)**, exactly matching this doc's
+   documented CPU baseline below. Confirms the fix is complete and the earlier
+   x86-specific numbers were an artifact of the wrong-file bug, not a real
+   architecture effect.
+
+**Not yet done as of this commit:** merging this branch to `main` and letting the
+existing GitHub Actions workflow redeploy Cloud Run with the corrected pin (the
+Dockerfile/deploy workflow themselves needed no changes — only the revision
+string).
 
 ## Background: why `crop_to_content` and `RandomErasing` exist
 
@@ -120,10 +181,68 @@ worse overall than the currently-deployed model. The apparent fix was an artifac
 which backend evaluated it, not a real change in the underlying weights' behavior
 under CPU inference.
 
-**Isolated ablations (RandomErasing-only vs class-weight-only, evaluated correctly on
-CPU) have not yet been tried** — the combined experiment conflated both fixes with
-the backend artifact, so it's still an open, cheap (~a few minutes) next step before
-concluding neither fix helps at all.
+**Isolated ablations (RandomErasing-only vs class-weight-only) have now been run and
+evaluated on CPU — see "Isolated ablations" below. Neither is a real fix.**
+
+## Isolated ablations (2026-07-24)
+
+The combined fine-tune above changed two things at once (`RandomErasing.area_frac`
+and `class_weight`), so it couldn't say which change (if either) did anything real.
+Ran each in isolation, same setup: continued training from
+`models/best_checkpoint_v2_resumed2.keras`, 6 epochs early-stopped on `val_accuracy`,
+`Adam(lr=2e-4)`, same train/val split (`image_dataset_from_directory(...,
+validation_split=0.2, seed=123)`). Training ran in `venv-train`
+(`tensorflow-metal`, for speed); **evaluation was forced onto CPU** by disabling GPU
+visibility (`tf.config.set_visible_devices([], "GPU")`) before any other TF op ran,
+via `scripts/eval_full_cpu.py`. Cross-checked predictions on 20 test images
+(5 per class) against real `tensorflow-cpu` in `venv-api` — bit-identical
+probabilities to 4 decimal places, confirming the CPU-forced venv-train numbers are
+trustworthy and not another GPU-artifact repeat.
+
+**RandomErasing-only** (`area_frac` (0.02,0.15) → (0.01,0.06), class_weight
+untouched) — saved to `models/experiment_finetune_randomerasing_only.keras`:
+
+- Train 95.29%, Val 93.13%, **Test 87.69%** (1403/1600)
+
+```
+glioma:     [333,   7,  54,   6]   83.25% recall
+meningioma: [ 86, 274,  17,  23]   68.50% recall
+notumor:    [  0,   0, 400,   0]   100%
+pituitary:  [  4,   0,   0, 396]   99.00%
+```
+
+**class-weight-only** (`class_weight={0:1.3,1:1.5,2:1.0,3:1.0}`, RandomErasing
+untouched) — saved to `models/experiment_finetune_classweight_only.keras`:
+
+- Train 93.75%, Val 90.54%, **Test 86.00%** (1376/1600)
+
+```
+glioma:     [334,   4,  54,   8]   83.50% recall
+meningioma: [105, 246,  21,  28]   61.50% recall
+notumor:    [  0,   0, 400,   0]   100%
+pituitary:  [  4,   0,   0, 396]   99.00%
+```
+
+**Verdict, vs. baseline (88.06% overall / 67.25% meningioma recall) and the combined
+experiment (86.94% / 64.50%), all CPU:**
+
+- **RandomErasing-only** is roughly a wash: meningioma recall +1.25pp (67.25% →
+  68.50%) but overall accuracy −0.37pp (88.06% → 87.69%), driven by glioma recall
+  dropping 85.25% → 83.25%. A small, noise-adjacent shuffle between glioma and
+  meningioma, not a real fix — but it's the isolated change closest to neutral, and
+  the one responsible for whatever small non-harmful signal exists in the combined
+  run.
+- **class-weight-only actively hurts**: meningioma recall −5.75pp (67.25% →
+  61.50%), overall −2.06pp (88.06% → 86.00%). Upweighting meningioma/glioma loss did
+  not translate into better meningioma recall on CPU — if anything more meningioma
+  images shifted to glioma (93 → 105 meningioma→glioma errors). This is the
+  dominant contributor to the combined experiment's CPU regression.
+- **Conclusion: neither isolated change is a real fix, and class weighting is the
+  worse of the two.** This matches the combined experiment's CPU result (86.94% /
+  64.50%, between these two and dragged down mostly by class weighting) and closes
+  out the "isolated ablations" open item — no further fine-tuning of this
+  architecture along these two axes is worth pursuing. The CPU/GPU divergence
+  documented below remains the dominant, unresolved issue.
 
 ## The CPU vs GPU divergence (the bigger finding)
 
@@ -165,14 +284,149 @@ guarantee of reproducing either number measured here.
 ## Current status / open follow-ups
 
 - No code or deployed files changed as a result of this investigation.
-  `models/experiment_finetune_v1.keras` exists as an experimental artifact only —
-  not recommended for promotion given the CPU-verified numbers above.
-- `scripts/compute_confusion_matrix.py` still points at the wrong (stale) model file
-  — needs fixing to use `app.config.MODEL_PATH` so future runs don't reproduce this
-  same confusion.
-- Untried: isolated RandomErasing-only and class-weight-only fine-tunes, evaluated
-  on CPU.
-- Untried: root-causing exactly which op diverges between CPU and Metal GPU kernels.
+  `models/experiment_finetune_v1.keras`, `models/experiment_finetune_randomerasing_only.keras`,
+  and `models/experiment_finetune_classweight_only.keras` exist as experimental
+  artifacts only — none recommended for promotion given the CPU-verified numbers
+  above.
+- **Fixed:** `scripts/compute_confusion_matrix.py` now loads via `app.config.MODEL_PATH`
+  (verified on CPU — reproduces 88.06% overall, 67.25% meningioma recall exactly).
+- **Done:** isolated RandomErasing-only and class-weight-only fine-tunes, evaluated
+  on CPU — see "Isolated ablations" above. Neither is a real fix; class weighting is
+  actively harmful. No further work planned along these two axes.
+- Untried: root-causing exactly which op diverges between CPU and Metal GPU kernels
+  — now the single highest-value remaining lead, since both training-side fixes
+  tried so far (combined and isolated) have failed to move CPU numbers.
 - Pre-existing, still open, related GitHub issues: #14 (fix `clean_images()`
   validation), #15 (audit train/test split for duplicate/near-duplicate leakage),
   #16 (transfer learning to raise the accuracy ceiling).
+
+## Root-caused (2026-07-24): the CPU/GPU divergence is a tensorflow-metal graph-mode bug that drops a Dense layer's ReLU activation, not a Conv/pooling numerical difference
+
+Follow-up session, `venv-train` (TF 2.18.0, `tensorflow-metal` 1.2.0, Apple M2 Max).
+Read-only: no retraining, no changes to `app/`, `models/`, or the deployed model.
+
+**Method:** loaded `app/model/tumor_classification_model.keras` directly, built
+sub-models from `model.input` to each layer's output in turn, and ran each
+sub-model on identical preprocessed input (real test images, via
+`app.preprocessing.preprocess_image_bytes`) under `tf.device('/CPU:0')` and
+`tf.device('/GPU:0')`.
+
+**First surprise: layer-wise CPU-vs-GPU bisection found nothing.** Comparing
+`sub(x, training=False)` (direct eager call) on CPU vs GPU, at every layer, for
+both the 4 fixture images and a real batch of 32 test images (including known
+flip cases) — every layer's max abs diff stayed at float32-noise level
+(~1e-7 to ~8e-6) all the way to the final softmax output. This flatly
+contradicts the aggregate 88.06%/92.44% gap, which meant the divergence isn't
+in eager CPU-vs-GPU numerics at all.
+
+**Second step, found the actual mechanism:** the project's own eval scripts
+(`compute_confusion_matrix.py`, and the GPU-side numbers quoted earlier in this
+doc) call **`model.predict()`**, not a direct eager call. Comparing
+`model.predict()` output against a direct eager `model(x, training=False)` call
+**on the same device** isolates a completely different axis:
+
+| | CPU: `predict()` vs eager call | GPU: `predict()` vs eager call |
+|---|---|---|
+| max abs diff (final softmax) | 0.0 (exact) | **0.6957** |
+
+On CPU, `predict()` and eager give identical results. On GPU (Metal),
+`model.predict()` diverges hugely from an eager call on the *identical* model,
+identical weights, identical input — proving this was never a CPU-vs-GPU
+kernel-numerics issue. It's specific to Metal's compiled-graph execution path.
+
+**Bisecting that predict()-vs-eager gap layer by layer (GPU only) pinpoints the
+exact culprit:** every layer up through `concatenate` (both Conv2D blocks,
+all four MaxPooling2D layers, GlobalAveragePooling2D, GlobalMaxPooling2D) shows
+**exactly 0.0** diff between `predict()` and eager call. The divergence appears
+abruptly at the first `Dense` layer (`dense`, 1024→128, ReLU activation,
+immediately after the GAP/GMP concat):
+
+```
+concatenate    max_abs=0.000000e+00
+dense          max_abs=3.984632e+01   <- jumps from 0 to ~40
+dropout        max_abs=3.984632e+01   (passthrough at inference)
+dense_1        max_abs=6.956916e-01   (final softmax, after 4-class squashing)
+```
+
+**Confirmed exactly what's wrong:** `model.predict()`'s output at the `dense`
+layer, on GPU, contains negative values (e.g. `-0.99, -8.21, -15.10, -37.17, ...`)
+even though the layer's activation is ReLU. Manually computing
+`relu(concat_output @ kernel + bias)` from the correct (eager) concat output
+matches the eager-call `dense` output exactly (0.0 diff) and matches the raw,
+*unclipped* linear result (`concat_output @ kernel + bias`, no ReLU at all)
+exactly against `predict()`'s GPU output (0.0 diff). **`model.predict()` on the
+Metal GPU backend silently skips the ReLU activation on this Dense layer,**
+passing the raw pre-activation (including negative values) forward into
+`dense_1`'s softmax, corrupting the final class probabilities by up to 0.95 in
+absolute probability mass on individual test images — fully explaining the
+154/1600 flipped predictions and the 88.06% vs 92.44% gap.
+
+**Confirmed this is graph-mode-general, not a `.predict()`-internals quirk:**
+wrapping the same sub-model call in a bare `@tf.function` (no Keras predict
+loop involved at all) reproduces the identical 39.85 max-abs diff on GPU.
+Deterministic and reproducible across repeated runs (matches the earlier
+finding that 5 repeated GPU predict() runs were bit-identical — this is a
+consistent bug, not stochastic noise). Confirmed **`model.compile(run_eagerly=True)`
+then `.predict()`** matches the eager-call output exactly (0.0 diff) — eager
+execution, whether invoked directly or forced via `run_eagerly=True`, always
+applies the activation correctly on this backend; only the default
+compiled-graph path drops it.
+
+**Not a simple "avoid fused Dense+activation" fix:** rebuilt the same 1024→128
+transform as a separate `Dense(activation=None)` layer followed by a standalone
+`Activation('relu')` layer (loading the identical weights) and ran it through
+`.predict()` on GPU — **same bug reproduces identically** (39.85 max abs diff
+vs the correct output). So this isn't specifically about Keras fusing an
+activation string into the Dense op's kernel; the ReLU op itself fails to
+execute under Metal's compiled-graph path in this model graph, whether it's a
+Dense's built-in activation or a separate Activation layer downstream of a
+linear Dense. (For contrast, raw `tf.matmul`/`tf.nn.relu` ops outside of any
+Keras layer, wrapped in the same kind of `@tf.function` and run on GPU, computed
+correctly — so the bug is specific to how the Keras layer/model machinery
+executes under Metal's graph mode, not a blanket "ReLU is broken on Metal.")
+
+**Corroborated by a known, unresolved upstream issue:**
+[tensorflow/tensorflow#61650](https://github.com/tensorflow/tensorflow/issues/61650),
+"Activation function of a Dense hidden layer not getting invoked" (TF 2.13,
+macOS 13.4, Apple M2 Max, `tensorflow-macos`+`tensorflow-metal`) — a from-scratch
+autoencoder repro where a Dense layer's ReLU never fires. Filed 2023, closed by
+the stale-bot after inactivity, never actually fixed. The reporter's own
+comment: "When I set eager execution to true the bug does not manifest ... I am
+guessing this has something to do with the execution graph optimization" —
+matches this investigation's finding exactly. Broader web search also surfaced
+reports of the Matmul+BiasAdd+Activation fusion pattern producing 30-80+
+magnitude errors under Metal graph mode vs ~1e-5 in eager mode, and a separate
+report of ReLU failing to clip negative values under `tensorflow-metal` on
+Apple M4, again only in compiled/graph execution, not CPU. This looks like a
+long-standing, never-fixed defect in the `tensorflow-metal` pluggable-device
+plugin's graph-mode handling of at least this Dense/activation pattern, not
+something specific to this project's model.
+
+**Practical takeaways:**
+
+1. **This project's existing discipline is already correct and must not
+   regress:** `scripts/eval_full_cpu.py` forces
+   `tf.config.set_visible_devices([], "GPU")` before any other TF op runs.
+   Every future accuracy/model-selection decision must go through a CPU-only
+   evaluation path like that one. This investigation found the *mechanism*
+   behind why GPU-side numbers can't be trusted, but the conclusion (CPU is
+   the only backend that matters for go/no-go decisions, because it's the only
+   backend Cloud Run production ever runs) was already correct and stands
+   reinforced, not revised.
+2. **If a GPU-accelerated sanity check is ever wanted during development,**
+   it must force eager execution (`model.compile(run_eagerly=True)` before
+   `.predict()`/`.evaluate()`, or call the model directly as
+   `model(x, training=False)` rather than `.predict()`) — the default
+   compiled-graph path silently corrupts results on this backend. This is a
+   workaround for local dev-loop sanity checks only, not a reason to ever
+   promote a GPU-measured metric to a deploy decision.
+3. **Training itself was not re-examined here** (out of scope for this
+   read-only investigation, and no retraining was done) — `model.fit()`'s
+   `train_step` is also `tf.function`-compiled by default, so it's plausible
+   the same class of bug affects some part of the training forward/backward
+   pass on this Metal backend too. Flagged as an open question, not concluded:
+   if training-time GPU behavior is ever suspected of contributing to a model
+   quality issue, it would need its own separate investigation (comparing
+   training on forced-CPU vs GPU), which was not attempted here.
+4. No code, deployed files, or model artifacts were changed. This section is a
+   diagnostic record only.
