@@ -18,6 +18,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.config import CLASS_NAMES
 from app.gradcam import generate_gradcam_overlay
 from app.inference import get_model, predict
 from app.preprocessing import ImageDecodeError, preprocess_image_bytes
@@ -83,10 +84,11 @@ async def predict_endpoint(file: UploadFile) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     predicted_class, confidences = await run_in_threadpool(predict, preprocessed)
+    predicted_class_index = CLASS_NAMES.index(predicted_class)
 
     model = get_model()
     heatmap_png_bytes = await run_in_threadpool(
-        generate_gradcam_overlay, model, preprocessed, image_bytes
+        generate_gradcam_overlay, model, preprocessed, image_bytes, predicted_class_index
     )
     gradcam_overlay = base64.b64encode(heatmap_png_bytes).decode("ascii")
 
