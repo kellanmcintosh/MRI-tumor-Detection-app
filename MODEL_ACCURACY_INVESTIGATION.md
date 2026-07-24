@@ -430,3 +430,129 @@ something specific to this project's model.
    training on forced-CPU vs GPU), which was not attempted here.
 4. No code, deployed files, or model artifacts were changed. This section is a
    diagnostic record only.
+
+## Independent corroboration (2026-07-24): confirms "RESOLVED: production was serving the wrong model file" above, plus rules out Docker/Rosetta emulation as a contributing factor, and confirms the fix has not yet reached live Cloud Run
+
+This section is an independently-run reproduction of the same incident described in
+"RESOLVED: production was serving the wrong model file" above (same root cause, same
+fix commit hash) — run without initial knowledge that a fix already existed on branch
+`fix/hf-model-revision-pin`, to answer a specific question the project owner raised:
+given that the project owner's local repro used `docker build --platform linux/amd64`
+on Apple Silicon (Rosetta/QEMU-emulated, not real x86_64), was the ~45% number possibly
+just an emulation artifact rather than a real bug? Read-only investigation, no
+retraining; no changes made to `app/`, `models/`, or deployed files (the existing fix
+commit was found already in place on disk, not applied by this session).
+
+**Reproduced.** Built fresh (`docker build --platform linux/amd64
+-t mri-tumor-app-investigation .`), ran it, drove 100 real HTTP `POST /predict`
+requests (25/class) at the container's exposed port 8000 (the same route/method
+production actually serves): **42.00% accuracy**, glioma recall **0%** (20/25 glioma
+images predicted `notumor`), heavy bias toward `notumor`/`meningioma`. Matches the
+reported ~45%.
+
+**Ruled out emulation as the cause, several independent ways:**
+- Docker Desktop is configured to emulate `linux/amd64` via **Rosetta**, not QEMU
+  (confirmed: the Docker Desktop VM process is launched with a `--rosetta` flag, and
+  the `oahd` Rosetta translation daemon is running on the host — checked via `ps aux`
+  and the VM launch command line; no Rosetta/virtualization keys were present in
+  `~/Library/Group Containers/group.com.docker/settings-store.json`, so this is
+  Docker Desktop's current default, not a manual override).
+- Basic vectorized numeric sanity checks inside the emulated container came back
+  clean: a 512×512 `float32` matmul (both raw NumPy and `tf.matmul`) vs. the same
+  computation upcast to `float64` gave max abs diffs of ~2.2e-4 and ~1.0e-4 —
+  ordinary float32 rounding, not the 30-80+ magnitude corruption signature of AVX
+  mis-emulation or the Metal ReLU-skip bug documented above.
+- Two direct-Python (non-HTTP) evaluations inside an x86_64-emulated container,
+  against the **correct** model file (SHA-256 `92e9e768...`, the one this doc's
+  earlier sections call "the deployed model"), both scored **85%** on a 120-image
+  sample (30/class) — matching this doc's documented healthy CPU baseline (88.06% on
+  the full 1600-image set): one calling `model.predict()` directly on the main
+  thread, one via a worker thread (mimicking `app.main`'s
+  `run_in_threadpool(predict, ...)`). Identical result either way — rules out a
+  threading-related regression too.
+- **Decisive test:** in the *same* running, Rosetta-emulated container that had just
+  scored 42% over HTTP, replaced only `/code/app/model/tumor_classification_model.keras`
+  with the correct-hash (`92e9e768...`) file, restarted the process, and re-ran the
+  identical 100-image HTTP `/predict` test: **85.00% accuracy**, glioma recall 80%,
+  meningioma 60% — back in line with the documented CPU baseline. Same emulated
+  environment, same code, only the model bytes changed. This isolates the cause
+  entirely to *which model file gets loaded*, not the environment.
+
+**Root cause, confirmed via the Hugging Face Hub API directly (bypassing Docker and
+any local cache entirely):**
+
+- `app/config.py` pins `HF_REVISION = "058ed5400e81f56dd9045a5f8fe554fadd60d9fc"`.
+  Downloading `tumor_classification_model.keras` from that exact revision via a plain
+  `curl` to `huggingface.co` (no Docker, no `hf_hub_download`, no local cache)
+  reproduces SHA-256 `2255b19a...` — the *old, pre-retrain* model (no
+  `RandomErasing` in its architecture; identical to the file
+  `scripts/compute_confusion_matrix.py` was found pointing at earlier in this doc).
+- The HF Hub repo's own commit history (`GET
+  /api/models/KellanMcintosh/mri-tumor-classifier/commits/main`) confirms this
+  directly. In order:
+  1. `a3502776...` "Upload retrained MRI tumor classification model" (2026-07-21)
+  2. `058ed540...` "Retrain: train 99.53% / val 96.70% / test 92.44% ..." (2026-07-22
+     16:31:49) — **this is the exact commit `app/config.py` is pinned to.**
+  3. `28cd87a0...` same title, one second later (2026-07-22 16:31:50)
+  4. `bd404594...` **"Fix: upload correct retrained model (train 99.53%/val
+     96.70%/test 92.44%) -- prior two commits at this filename accidentally
+     contained the pre-retrain model"** (2026-07-24 20:06:47) — uploaded by the
+     project owner today. Downloading this revision reproduces SHA-256
+     `92e9e768...`, byte-identical to `models/tumor_classification_model_v2.keras`.
+  The HF repo owner's own commit message confirms commits 2 and 3 (058ed540/28cd87a0)
+  contain the wrong file. **`app/config.py` was never updated to point at the fix
+  (`bd404594...`)** — it is still pinned to one of the two broken commits.
+- This means every build from the current repo state — this investigation's local
+  build, and (per below) real Cloud Run production itself — downloads the same wrong,
+  pre-retrain model. It has nothing to do with `--platform linux/amd64` or local
+  emulation; a native x86_64 build would fetch the identical wrong bytes, because HF
+  Hub revisions are immutable/content-addressed and the pin itself points at bad
+  content.
+
+**Confirmed this is live in real production right now**, not just a local artifact.
+Looked up the live service URL (`gcloud run services describe
+mri-tumor-detection-app --region us-central1 --format 'value(status.url)'`,
+read-only, already-authenticated `gcloud`, no login/config changes) —
+`https://mri-tumor-detection-app-p667kknyea-uc.a.run.app`. Sent a single test image
+(`Te-gl_1.jpg`, true label glioma) to real production `/predict` over HTTPS: returned
+`notumor` with confidence `0.5955949425697327` — **bit-identical to 15 decimal places**
+to the local emulated build's output for the same image. Then sent 60 images (15/class)
+through real production `/predict`: **41.67% accuracy**, glioma recall 0%, same
+notumor/meningioma bias pattern as the local repro. **Real Cloud Run production,
+on genuine x86_64 hardware with zero emulation involved, is currently serving
+this exact broken behavior to real users.**
+
+(Aside, unrelated to root cause but checked along the way: a separately-cached local
+Docker image tagged `mri-tumor-app`, built 2026-07-21, and a locally-cached copy of
+the Artifact Registry image tagged 2026-07-22, both carry a *third*, different model
+hash `2af0dc6e...` — stale artifacts from before the retrain commit landed, not
+representative of the current repo state or the currently-live Cloud Run revision.
+Left untouched; not relevant to this investigation's conclusion, which is
+independently confirmed via the live service URL above.)
+
+**Conclusion: this is not a Docker/Rosetta emulation artifact. It's a real,
+currently-live production incident**, unrelated to the CPU/GPU Metal bug documented
+elsewhere in this file. Root cause is a stale HF Hub revision pin in
+`app/config.py`: the pinned commit (`058ed5400e81f56dd9045a5f8fe554fadd60d9fc`)
+contains a pre-retrain model file that the model repo owner themselves later flagged
+and fixed on HF Hub (commit `bd4045947697284c629d5f2e5a261609f1bab691`, today), but
+the fix was never wired back into this repo's pin. Production has been serving the
+wrong model (~42-45% accuracy, 0% glioma recall) since whenever the last Cloud Run
+deploy happened after the `058ed540...`/`28cd87a0...` commits landed on HF Hub
+(2026-07-22), independent of anyone building locally.
+
+**Recommendation (not applied — this investigation is read-only per its scope):**
+update `app/config.py`'s `HF_REVISION` to `bd4045947697284c629d5f2e5a261609f1bab691`,
+verify the downloaded file hashes to `92e9e768853f15f71737e2a03a2e0cfd5ae772039c51fb75e5ca56ee4aa6166aa`
+(matches `models/tumor_classification_model_v2.keras`), then redeploy through the
+normal GitHub Actions pipeline (push to `main`) per this repo's documented deploy
+process — **do not** `gcloud run deploy` a manual/local build out-of-band. This is
+urgent: real production is currently serving a materially worse model to real users.
+Separately worth adding: some form of post-deploy smoke test (e.g. CI hits a
+known-label fixture image against the freshly deployed revision and asserts the
+predicted class) would have caught this automatically instead of requiring a manual
+accuracy report.
+
+No code, deployed files, or model artifacts were changed as part of this
+investigation. All Docker containers/images created for this investigation
+(`mri-tumor-app-investigation` image and its container) were removed afterward.
