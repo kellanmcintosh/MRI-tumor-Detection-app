@@ -69,6 +69,28 @@
       </div>
 
       <p id="error-message" class="error-message" role="alert" hidden></p>
+
+      <div class="sample-gallery">
+        <p class="sample-gallery-label">No scan on hand? Try a sample</p>
+        <div class="sample-grid" role="group" aria-label="Sample MRI scans">
+          <button type="button" class="sample-btn" data-sample="glioma" data-filename="glioma_sample.jpg">
+            <img src="/static/samples/glioma.jpg" alt="Sample MRI scan showing a glioma tumor" loading="lazy" />
+            <span class="sample-tag">Glioma</span>
+          </button>
+          <button type="button" class="sample-btn" data-sample="meningioma" data-filename="meningioma_sample.jpg">
+            <img src="/static/samples/meningioma.jpg" alt="Sample MRI scan showing a meningioma tumor" loading="lazy" />
+            <span class="sample-tag">Meningioma</span>
+          </button>
+          <button type="button" class="sample-btn" data-sample="pituitary" data-filename="pituitary_sample.jpg">
+            <img src="/static/samples/pituitary.jpg" alt="Sample MRI scan showing a pituitary tumor" loading="lazy" />
+            <span class="sample-tag">Pituitary</span>
+          </button>
+          <button type="button" class="sample-btn" data-sample="notumor" data-filename="notumor_sample.jpg">
+            <img src="/static/samples/notumor.jpg" alt="Sample MRI scan with no tumor" loading="lazy" />
+            <span class="sample-tag">No tumor</span>
+          </button>
+        </div>
+      </div>
     </section>
 
     <section id="results-panel" class="panel results-panel" aria-labelledby="results-heading" hidden>
