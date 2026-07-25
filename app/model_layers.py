@@ -19,7 +19,7 @@ class RandomErasing(layers.Layer):
     """Randomly zeroes a rectangular region per image during training so the
     model can't reliably key off any one fixed region -- added after
     Grad-CAM showed heavy reliance on the black background/border rather
-    than brain tissue (see MODEL_NOTES.md). No-op at inference
+    than brain tissue (see docs/MODEL_NOTES.md). No-op at inference
     (training=False), same convention as RandomFlip/RandomRotation, so
     `app/preprocessing.py` and the rest of `app/inference.py` need no
     changes for this.
