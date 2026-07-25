@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>About — MRI Tumor Classifier</title>
-  <meta name="description" content="Why this MRI tumor classifier was built, how the pipeline works, and why deployment moved from Hugging Face Spaces to Google Cloud Run." />
+  <meta name="description" content="Why this MRI tumor classifier was built, how the pipeline works, the real production incident and model-accuracy bugs uncovered along the way, and what's next." />
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
@@ -25,7 +25,8 @@
     <p class="story-lede">
       This app takes a brain MRI, classifies it as glioma, meningioma, pituitary, or no tumor,
       and shows a Grad-CAM heatmap of what the model actually looked at. Here's why it exists,
-      how the pipeline works, and why the deployment target changed partway through the build.
+      how the pipeline works, the real bugs and a production incident it took to get the
+      accuracy numbers on this page trustworthy, and what's still left to fix.
     </p>
   </header>
 
@@ -47,10 +48,10 @@
         pipeline where pushing to <code>main</code> is the only way the live app changes.
       </p>
       <p>
-        Worth noting: <strong>the original trained model file was lost</strong> &mdash; the
-        save path and the environment that produced it were both gone by the time this build
-        started. So the first step wasn't wiring up the API; it was retraining the notebook
-        from scratch to get a usable model artifact back.
+        Getting there turned out to be a much longer road than "wire up an API." Along the
+        way this surfaced a real production incident, a subtle GPU-vs-CPU numerics bug, and
+        a genuine, still-open accuracy weak point &mdash; all covered in detail further down
+        this page.
       </p>
     </div>
   </section>
@@ -78,29 +79,28 @@
       <p>
         The training notebook doesn't fix a random seed for weight initialization (only the
         train/validation split is seeded), so accuracy varies a little between runs. These
-        are the numbers from the run actually hosting the live app, not a cherry-picked one:
+        numbers are also deliberately <strong>not</strong> the ones the training notebook first
+        reported &mdash; they're re-measured directly against the exact code path production
+        actually runs (CPU inference, the real <code>app.preprocessing</code> &rarr;
+        <code>app.inference</code> pipeline), because it turned out the notebook's own numbers
+        were quietly inflated by a GPU-specific bug. That story is below, under "What went
+        wrong" &mdash; these are the real, verified numbers:
       </p>
 
       <div class="stat-row">
         <div class="stat-cell">
-          <div class="stat-value">99.5%</div>
+          <div class="stat-value">94.96%</div>
           <div class="stat-label">Train accuracy</div>
         </div>
         <div class="stat-cell">
-          <div class="stat-value">96.7%</div>
+          <div class="stat-value">92.23%</div>
           <div class="stat-label">Validation accuracy</div>
         </div>
         <div class="stat-cell">
-          <div class="stat-value">92.4%</div>
+          <div class="stat-value">88.06%</div>
           <div class="stat-label">Test accuracy</div>
         </div>
       </div>
-
-      <p>
-        This is a retrained run on an updated architecture, and it closed most of the gap to
-        the original notebook's 93.7% test accuracy. Re-running training with a fixed seed to
-        pin down run-to-run variance is tracked as a follow-up.
-      </p>
 
       <p>
         Aggregate accuracy hides where a model actually struggles, so here's the full
@@ -123,17 +123,17 @@
           <tbody>
             <tr>
               <th scope="row">True glioma</th>
-              <td class="diag" style="--intensity: 0.31">310</td>
-              <td style="--intensity: 0.054">54</td>
-              <td style="--intensity: 0.031">31</td>
-              <td style="--intensity: 0.005">5</td>
+              <td class="diag" style="--intensity: 0.341">341</td>
+              <td style="--intensity: 0.004">4</td>
+              <td style="--intensity: 0.047">47</td>
+              <td style="--intensity: 0.008">8</td>
             </tr>
             <tr>
               <th scope="row">True meningioma</th>
+              <td style="--intensity: 0.093">93</td>
+              <td class="diag" style="--intensity: 0.269">269</td>
               <td style="--intensity: 0.013">13</td>
-              <td class="diag" style="--intensity: 0.37">370</td>
-              <td style="--intensity: 0.012">12</td>
-              <td style="--intensity: 0.005">5</td>
+              <td style="--intensity: 0.025">25</td>
             </tr>
             <tr>
               <th scope="row">True notumor</th>
@@ -144,8 +144,8 @@
             </tr>
             <tr>
               <th scope="row">True pituitary</th>
-              <td style="--intensity: 0">0</td>
               <td style="--intensity: 0.001">1</td>
+              <td style="--intensity: 0">0</td>
               <td style="--intensity: 0">0</td>
               <td class="diag" style="--intensity: 0.399">399</td>
             </tr>
@@ -154,16 +154,104 @@
       </div>
 
       <p>
-        <em>notumor</em> and <em>pituitary</em> are classified almost perfectly. The model's
-        real blind spot is telling <em>glioma</em> and <em>meningioma</em> apart: 54 glioma
-        scans (13.5%) were called meningioma, and 13 meningioma scans were called glioma
-        &mdash; together most of the errors on the whole test set.
+        <em>notumor</em> and <em>pituitary</em> are classified almost perfectly (100% and
+        99.75% recall). The model's real weak point is <em>meningioma</em>, recalled correctly
+        only 67.25% of the time &mdash; 93 of 400 true meningioma scans (23%) get called
+        glioma, by far the largest single error bucket on the whole test set. The full
+        investigation into why is below.
       </p>
     </div>
   </section>
 
+  <section class="story-section" id="issues">
+    <div class="story-section-label"><span>03</span>Issues I ran into</div>
+    <div class="story-body">
+      <h2>What went wrong</h2>
+      <p>
+        <strong>A metric that was measured on the wrong backend.</strong> The training
+        notebook first reported 99.53% / 96.70% / 92.44% (train/val/test) &mdash; run on a
+        GPU (Apple Silicon, <code>tensorflow-metal</code>) during local development. Re-measuring
+        the exact same weights on CPU (the only backend Cloud Run actually has &mdash; there's
+        no GPU option there at all) gave a materially worse 88.06% test accuracy, with 154 of
+        1,600 test images flipping predicted class purely based on which backend ran inference.
+        Bisecting that gap layer-by-layer found the exact cause: <code>model.predict()</code>
+        on the Metal GPU backend silently skips the ReLU activation on a Dense layer under
+        compiled-graph execution, passing raw (partly negative) values into the final softmax
+        and corrupting the output. Forcing eager execution fixed it immediately, which
+        confirmed the bug lives in Metal's compiled-graph path, not the model itself &mdash; and
+        matches a known, still-unresolved
+        <a href="https://github.com/tensorflow/tensorflow/issues/61650" target="_blank" rel="noopener">upstream TensorFlow issue</a>.
+        Lesson: never trust a GPU-measured metric for a model that will only ever serve on CPU
+        in production &mdash; every accuracy number on this page is now CPU-verified against the
+        real serving path.
+      </p>
+      <p>
+        <strong>A class the model still confuses.</strong> Meningioma is the real accuracy
+        weak point (67.25% recall, mostly misread as glioma). Grad-CAM inspection pointed at a
+        location-cue problem: the correctly-classified meningioma heatmaps skew toward the
+        skull-adjacent periphery, while gliomas sit deeper and more centrally &mdash; and this
+        architecture's <code>GlobalAveragePooling</code>/<code>GlobalMaxPooling</code> layers
+        can't encode <em>where</em> a signal is, only that it exists. That's likely compounded
+        by <code>RandomErasing</code>, a training-time augmentation that randomly blanks a
+        small rectangular region per image &mdash; a fixed-size erasure box has proportionally
+        higher odds of fully wiping a thin peripheral meningioma than a large central glioma
+        mass. Three fine-tuning attempts followed (shrinking the erasure area, upweighting
+        meningioma/glioma loss, and both together) &mdash; none produced a real, CPU-verified
+        improvement, and the loss-weighting change actively made things worse. A real fix
+        looks like it needs an architectural change (a non-pooled spatial feature), not a
+        training-time tweak, and hasn't been attempted yet.
+      </p>
+      <p>
+        <strong>It performs worse on MRIs that don't match the training data's "house
+        style."</strong> Scans pulled from random sources on the internet &mdash; different
+        scanners, different windowing/contrast conventions, different framing &mdash; are
+        classified noticeably less reliably than the Kaggle test set, even for cases that look
+        unambiguous to the eye. This isn't really a bug so much as an honest limitation of the
+        training data: the source dataset merges three separate collections, each with its own
+        acquisition and preprocessing quirks, and the model has learned some of that as signal
+        rather than noise. My take: if this were being built for an actual hospital or imaging
+        provider, trained and validated on <em>that</em> institution's own scanner output and
+        protocols, I'd expect it to perform well &mdash; but a single model that generalizes
+        well across every MRI machine, protocol, and institution in the world is close to an
+        unsolvable problem with this amount of data. Real clinical deployments are
+        institution-specific for exactly this reason.
+      </p>
+      <p>
+        <strong>A production incident: the live app was silently serving the wrong model.</strong>
+        A user report of "every single prediction wrong" led to discovering that the pinned
+        Hugging Face Hub revision in <code>app/config.py</code>, despite a commit message
+        reading "Retrain: train 99.53% / val 96.70% / test 92.44%," actually contained the
+        <em>pre-retrain</em> model file, verified by SHA-256. The original upload script had
+        pushed the wrong local path to the Hub &mdash; twice &mdash; under a commit message
+        describing the right model. This went uncaught for a while because a correct model
+        file happened to already be sitting in a local dev machine's cache, masking what a
+        fresh <code>scripts/download_model.py</code> run (what Docker build time, and
+        therefore Cloud Run, actually does) would pull. Real production impact was severe:
+        as low as ~42% accuracy with 0% glioma recall, confirmed by sending real images to
+        the live endpoint. The fix was re-uploading the verified-correct file under a new,
+        hash-checked commit and re-pinning the revision &mdash; and the lesson driving the
+        "what's next" item below: a commit message is a claim, not a guarantee; only a hash
+        (or a smoke test) proves what's actually being served.
+      </p>
+    </div>
+  </section>
+
+  <section class="story-section" id="next">
+    <div class="story-section-label"><span>04</span>Roadmap</div>
+    <div class="story-body">
+      <h2>What's next</h2>
+      <ol class="pipeline">
+        <li><strong>Post-deploy smoke test in CI</strong><span>Hit a known-label fixture image against every freshly deployed revision and assert the predicted class, so a wrong-model-file incident like the one above gets caught automatically before a real user does.</span></li>
+        <li><strong>A non-pooled spatial feature</strong><span>Give the architecture some way to encode tumor location instead of collapsing everything through global pooling &mdash; the most promising lead for closing the meningioma/glioma gap, not yet attempted.</span></li>
+        <li><strong>Transfer learning</strong><span>Swap the from-scratch CNN for a pretrained backbone (EfficientNet/ResNet-style) to raise the overall accuracy ceiling beyond what's reachable from ~5,700 training images alone.</span></li>
+        <li><strong>Audit the train/test split</strong><span>The source dataset merges three separate collections &mdash; worth checking for duplicate or near-duplicate scans across the split before trusting these numbers as a hard ceiling.</span></li>
+        <li><strong>Fixed random seed for training</strong><span>Weight initialization currently isn't seeded, so accuracy shifts a little between retraining runs &mdash; pinning it would make future before/after comparisons trustworthy.</span></li>
+      </ol>
+    </div>
+  </section>
+
   <section class="story-section" id="stack">
-    <div class="story-section-label"><span>03</span>Under the hood</div>
+    <div class="story-section-label"><span>05</span>Under the hood</div>
     <div class="story-body">
       <h2>Architecture</h2>
       <p>
@@ -194,7 +282,7 @@
   </section>
 
   <section class="story-section" id="deploy">
-    <div class="story-section-label"><span>04</span>Deployment</div>
+    <div class="story-section-label"><span>06</span>Deployment</div>
     <div class="story-body">
       <h2>Switching from Hugging Face Spaces to Cloud Run</h2>
       <p>
@@ -220,7 +308,7 @@
   </section>
 
   <section class="story-section" id="dataset">
-    <div class="story-section-label"><span>05</span>Credit</div>
+    <div class="story-section-label"><span>07</span>Credit</div>
     <div class="story-body">
       <h2>Dataset &amp; license</h2>
       <p>
