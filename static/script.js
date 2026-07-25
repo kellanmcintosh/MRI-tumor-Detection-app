@@ -16,6 +16,7 @@
   const changeImageBtn = document.getElementById("change-image-btn");
   const analyzeBtn = document.getElementById("analyze-btn");
   const errorMessage = document.getElementById("error-message");
+  const sampleButtons = document.querySelectorAll(".sample-btn");
 
   const resultsPanel = document.getElementById("results-panel");
   const loadingState = document.getElementById("loading-state");
@@ -73,6 +74,7 @@
   function handleFileSelected(file) {
     hideError();
     hideResults();
+    sampleButtons.forEach((btn) => btn.classList.remove("is-selected"));
 
     // Client-side sanity check for a fast UX signal; the backend is the
     // real source of truth and still validates/rejects non-images itself.
@@ -101,6 +103,7 @@
   function resetToEmptyState({ keepError = false } = {}) {
     selectedFile = null;
     fileInput.value = "";
+    sampleButtons.forEach((btn) => btn.classList.remove("is-selected"));
     if (previewObjectUrl) {
       URL.revokeObjectURL(previewObjectUrl);
       previewObjectUrl = null;
@@ -115,6 +118,40 @@
     hideResults();
     if (!keepError) {
       hideError();
+    }
+  }
+
+  // ---------- Sample scans ----------
+
+  sampleButtons.forEach((button) => {
+    button.addEventListener("click", () => loadSample(button));
+  });
+
+  async function loadSample(button) {
+    hideError();
+    const img = button.querySelector("img");
+    const sampleName = button.dataset.sample;
+    const filename = button.dataset.filename || `${sampleName}.jpg`;
+
+    button.disabled = true;
+
+    try {
+      const response = await fetch(img.src);
+      if (!response.ok) {
+        throw new Error("Could not load the sample scan. Please try again.");
+      }
+      const blob = await response.blob();
+      const file = new File([blob], filename, { type: blob.type || "image/jpeg" });
+      handleFileSelected(file);
+      button.classList.add("is-selected");
+    } catch (err) {
+      showError(
+        err instanceof Error && err.message
+          ? err.message
+          : "Could not load the sample scan. Please try again."
+      );
+    } finally {
+      button.disabled = false;
     }
   }
 
