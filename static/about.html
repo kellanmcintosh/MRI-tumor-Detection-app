@@ -3,341 +3,225 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>About — MRI Tumor Classifier</title>
-  <meta name="description" content="Why this MRI tumor classifier was built, how the pipeline works, the real production incident and model-accuracy bugs uncovered along the way, and what's next." />
+  <title>About · MRI Tumor Classifier</title>
+  <meta name="description" content="Model architecture, measured accuracy, known limitations, and deployment of the MRI tumor classifier." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400;500;600&display=swap" />
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <div class="ruler" aria-hidden="true"></div>
-
-  <nav class="topnav" aria-label="Primary">
-    <span></span>
-    <div class="topnav-links">
+  <header class="shell topbar">
+    <a class="wordmark" href="/">
+      <span class="wordmark-mark" aria-hidden="true"></span>
+      <span class="wordmark-text">MRI Tumor Classifier</span>
+    </a>
+    <nav class="topnav" aria-label="Primary">
       <a href="/">Classifier</a>
       <a href="/about" aria-current="page">About</a>
       <a class="external" href="https://github.com/kellanmcintosh/MRI-tumor-Detection-app" target="_blank" rel="noopener">Source</a>
-    </div>
-  </nav>
-
-  <header class="story-hero">
-    <p class="story-eyebrow">About this project</p>
-    <h1>From notebook to deployed <em>API</em>.</h1>
-    <p class="story-lede">
-      This app takes a brain MRI, classifies it as glioma, meningioma, pituitary, or no tumor,
-      and shows a Grad-CAM heatmap of what the model actually looked at. Here's why it exists,
-      how the pipeline works, the real bugs and a production incident it took to get the
-      accuracy numbers on this page trustworthy, and what's still left to fix.
-    </p>
+    </nav>
   </header>
 
-  <section class="story-section" id="why">
-    <div class="story-section-label"><span>01</span>Origin</div>
-    <div class="story-body">
-      <h2>Why this exists</h2>
+  <div class="shell">
+    <div class="page-head page-head-about">
+      <h1>About</h1>
       <p>
-        The model started as a Jupyter notebook: a small CNN trained on brain MRI scans to
-        tell four classes apart, run cell-by-cell on a personal machine until it hit a
-        respectable test accuracy. That's useful for validating an approach, but a notebook
-        on its own has no API, no deployment, and no failure handling &mdash; nobody can open
-        a link and try it.
-      </p>
-      <p>
-        This project turns that notebook into something a recruiter, another developer,
-        or anyone with a browser can actually use: a FastAPI backend serving real-time
-        inference, a Grad-CAM layer so the prediction isn't a black box, and a deployment
-        pipeline where pushing to <code>main</code> is the only way the live app changes.
-      </p>
-      <p>
-        Getting there turned out to be a much longer road than "wire up an API." Along the
-        way this surfaced a real production incident, a subtle GPU-vs-CPU numerics bug, and
-        a genuine, still-open accuracy weak point &mdash; all covered in detail further down
-        this page.
+        A CNN that classifies brain MRI scans into four classes, served by a FastAPI
+        backend that returns a Grad-CAM heatmap with every prediction.
       </p>
     </div>
-  </section>
+  </div>
 
-  <section class="story-section" id="model">
-    <div class="story-section-label"><span>02</span>The model</div>
-    <div class="story-body">
-      <h2>How it works</h2>
-      <p>
-        The network uses four Conv2D + MaxPooling blocks (64 / 64 / 128 / 512 filters). The
-        last block feeds both Global Average Pooling and Global Max Pooling in parallel,
-        concatenated together into a Dense(128) layer with 0.3 dropout, ending in a 4-way
-        softmax. Trained on the Kaggle <em>brain-tumor-mri-dataset</em> at 256&times;256
-        resolution. Nothing exotic &mdash; the point of this build was never a state-of-the-art
-        architecture, it was proving the surrounding engineering.
-      </p>
+  <main class="shell doc">
+    <section class="doc-section" id="model">
+      <div class="doc-label"><span>01</span>Model</div>
+      <div class="doc-body">
+        <h2>Architecture and accuracy</h2>
+        <p>
+          Four Conv2D + MaxPooling blocks (64, 64, 128, 512 filters). The last block feeds
+          global average and global max pooling in parallel, concatenated into a Dense(128)
+          layer with 0.3 dropout and a 4-way softmax. Trained from scratch on 256&times;256
+          images.
+        </p>
 
-      <ol class="pipeline">
-        <li><strong>Decode &amp; resize</strong><span>The uploaded image is decoded and resized using TensorFlow's own ops &mdash; not PIL. The model was trained on TF's internal resize behavior, and a PIL reimplementation uses different interpolation, which quietly skews accuracy between training and serving.</span></li>
-        <li><strong>Normalize</strong><span>Pixels are rescaled to a 0&ndash;1 float range, matching training preprocessing exactly.</span></li>
-        <li><strong>Predict</strong><span>The CNN, loaded once at process startup, returns a class label plus a confidence score for all four classes &mdash; not just the top guess.</span></li>
-        <li><strong>Explain</strong><span>Grad-CAM finds the model's last convolutional layer programmatically (never a hardcoded layer name), traces gradients back through it, and overlays a heatmap so you can see what drove the call.</span></li>
-      </ol>
-
-      <p>
-        The training notebook doesn't fix a random seed for weight initialization (only the
-        train/validation split is seeded), so accuracy varies a little between runs. These
-        numbers are also deliberately <strong>not</strong> the ones the training notebook first
-        reported &mdash; they're re-measured directly against the exact code path production
-        actually runs (CPU inference, the real <code>app.preprocessing</code> &rarr;
-        <code>app.inference</code> pipeline), because it turned out the notebook's own numbers
-        were quietly inflated by a GPU-specific bug. That story is below, under "What went
-        wrong" &mdash; these are the real, verified numbers:
-      </p>
-
-      <div class="stat-row">
-        <div class="stat-cell">
-          <div class="stat-value">94.96%</div>
-          <div class="stat-label">Train accuracy</div>
+        <div class="stats">
+          <div class="stat">
+            <div class="stat-value">94.96<small>%</small></div>
+            <div class="stat-label">Train</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">92.23<small>%</small></div>
+            <div class="stat-label">Validation</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">88.06<small>%</small></div>
+            <div class="stat-label">Test</div>
+          </div>
         </div>
-        <div class="stat-cell">
-          <div class="stat-value">92.23%</div>
-          <div class="stat-label">Validation accuracy</div>
+        <p class="caption">Accuracy measured on CPU through the same code path the deployed app runs.</p>
+
+        <h3>Recall by class</h3>
+        <ul class="bars">
+          <li class="bar-row"><span>No tumor</span><span class="bar-value">100.00%</span><span class="bar-track"><span class="bar-fill" style="width: 100%"></span></span></li>
+          <li class="bar-row"><span>Pituitary</span><span class="bar-value">99.75%</span><span class="bar-track"><span class="bar-fill" style="width: 99.75%"></span></span></li>
+          <li class="bar-row"><span>Glioma</span><span class="bar-value">85.25%</span><span class="bar-track"><span class="bar-fill" style="width: 85.25%"></span></span></li>
+          <li class="bar-row is-weak"><span>Meningioma</span><span class="bar-value">67.25%</span><span class="bar-track"><span class="bar-fill" style="width: 67.25%"></span></span></li>
+        </ul>
+
+        <h3>Confusion matrix</h3>
+        <div class="matrix-wrap">
+          <table class="matrix">
+            <thead>
+              <tr>
+                <th scope="col">True / predicted</th>
+                <th scope="col">Glioma</th>
+                <th scope="col">Meningioma</th>
+                <th scope="col">No tumor</th>
+                <th scope="col">Pituitary</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">Glioma</th>
+                <td class="diag">341</td>
+                <td style="--n: 4">4</td>
+                <td style="--n: 47">47</td>
+                <td style="--n: 8">8</td>
+              </tr>
+              <tr>
+                <th scope="row">Meningioma</th>
+                <td style="--n: 93">93</td>
+                <td class="diag">269</td>
+                <td style="--n: 13">13</td>
+                <td style="--n: 25">25</td>
+              </tr>
+              <tr>
+                <th scope="row">No tumor</th>
+                <td>0</td>
+                <td>0</td>
+                <td class="diag">400</td>
+                <td>0</td>
+              </tr>
+              <tr>
+                <th scope="row">Pituitary</th>
+                <td style="--n: 1">1</td>
+                <td>0</td>
+                <td>0</td>
+                <td class="diag">399</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-        <div class="stat-cell">
-          <div class="stat-value">88.06%</div>
-          <div class="stat-label">Test accuracy</div>
+        <p class="caption">Test set, 400 images per class. Rows are true labels, columns are predictions.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="pipeline">
+      <div class="doc-label"><span>02</span>Pipeline</div>
+      <div class="doc-body">
+        <h2>What happens to an upload</h2>
+        <ol class="steps">
+          <li><strong>Decode and resize</strong><span>TensorFlow ops, the same resize used in training, so serving matches training.</span></li>
+          <li><strong>Normalize</strong><span>Pixel values are scaled to the 0 to 1 range.</span></li>
+          <li><strong>Predict</strong><span>The model, loaded once at startup, returns a confidence for each of the four classes.</span></li>
+          <li><strong>Explain</strong><span>Grad-CAM traces gradients through the last convolutional layer and overlays the heatmap on the scan.</span></li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="doc-section" id="limitations">
+      <div class="doc-label"><span>03</span>Limitations</div>
+      <div class="doc-body">
+        <h2>Known limitations</h2>
+        <div class="limits">
+          <div class="limit">
+            <h3>Meningioma is often read as glioma</h3>
+            <p>
+              93 of 400 meningioma test scans are classified as glioma. Location is the main
+              cue separating the two, and global pooling discards it. Three fine-tuning
+              attempts did not help. A fix likely needs an architectural change.
+            </p>
+          </div>
+          <div class="limit">
+            <h3>GPU metrics did not match CPU</h3>
+            <p>
+              The notebook reported 92.44% test accuracy on Apple's Metal GPU backend. The same
+              weights score 88.06% on CPU, which is what Cloud Run uses. The cause is a
+              <a href="https://github.com/tensorflow/tensorflow/issues/61650" target="_blank" rel="noopener">known TensorFlow issue</a>
+              where Metal skips a Dense layer's ReLU in compiled-graph execution.
+            </p>
+          </div>
+          <div class="limit">
+            <h3>Scans from other sources are less reliable</h3>
+            <p>
+              The training data merges three collections, each with its own scanners and
+              contrast conventions. Images that look different from them are classified less
+              accurately than the test set.
+            </p>
+          </div>
         </div>
       </div>
+    </section>
 
-      <p>
-        Aggregate accuracy hides where a model actually struggles, so here's the full
-        breakdown on the 1,600-image test set: rows are the true label, columns are what the
-        model predicted.
-      </p>
-
-      <div class="confusion-matrix-wrap">
-        <table class="confusion-matrix">
-          <caption>Test set confusion matrix (400 images per class)</caption>
-          <thead>
-            <tr>
-              <th scope="col"></th>
-              <th scope="col">Pred. glioma</th>
-              <th scope="col">Pred. meningioma</th>
-              <th scope="col">Pred. notumor</th>
-              <th scope="col">Pred. pituitary</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <th scope="row">True glioma</th>
-              <td class="diag" style="--intensity: 0.341">341</td>
-              <td style="--intensity: 0.004">4</td>
-              <td style="--intensity: 0.047">47</td>
-              <td style="--intensity: 0.008">8</td>
-            </tr>
-            <tr>
-              <th scope="row">True meningioma</th>
-              <td style="--intensity: 0.093">93</td>
-              <td class="diag" style="--intensity: 0.269">269</td>
-              <td style="--intensity: 0.013">13</td>
-              <td style="--intensity: 0.025">25</td>
-            </tr>
-            <tr>
-              <th scope="row">True notumor</th>
-              <td style="--intensity: 0">0</td>
-              <td style="--intensity: 0">0</td>
-              <td class="diag" style="--intensity: 0.4">400</td>
-              <td style="--intensity: 0">0</td>
-            </tr>
-            <tr>
-              <th scope="row">True pituitary</th>
-              <td style="--intensity: 0.001">1</td>
-              <td style="--intensity: 0">0</td>
-              <td style="--intensity: 0">0</td>
-              <td class="diag" style="--intensity: 0.399">399</td>
-            </tr>
-          </tbody>
-        </table>
+    <section class="doc-section" id="stack">
+      <div class="doc-label"><span>04</span>Architecture</div>
+      <div class="doc-body">
+        <h2>Backend</h2>
+        <p>
+          Three modules with narrow interfaces: preprocessing (bytes to array), inference
+          (array to prediction), and Grad-CAM (array to heatmap). The FastAPI routes wire them
+          together and map failures to HTTP errors, so a bad upload returns a <code>400</code>.
+        </p>
+        <p>
+          The model file is not in git. It is hosted on the Hugging Face Hub and pulled into
+          the Docker image at build time, pinned to a commit revision.
+        </p>
+        <dl class="spec">
+          <dt>Model</dt><dd>TensorFlow / Keras, Grad-CAM</dd>
+          <dt>API</dt><dd>FastAPI, Uvicorn</dd>
+          <dt>Frontend</dt><dd>Static HTML, CSS, and JavaScript with no build step</dd>
+          <dt>Delivery</dt><dd>Docker, GitHub Actions, Artifact Registry, Cloud Run</dd>
+        </dl>
       </div>
+    </section>
 
-      <p>
-        <em>notumor</em> and <em>pituitary</em> are classified almost perfectly (100% and
-        99.75% recall). The model's real weak point is <em>meningioma</em>, recalled correctly
-        only 67.25% of the time &mdash; 93 of 400 true meningioma scans (23%) get called
-        glioma, by far the largest single error bucket on the whole test set. The full
-        investigation into why is below.
-      </p>
-    </div>
-  </section>
-
-  <section class="story-section" id="issues">
-    <div class="story-section-label"><span>03</span>Issues I ran into</div>
-    <div class="story-body">
-      <h2>What went wrong</h2>
-      <p>
-        <strong>A metric that was measured on the wrong backend.</strong> The training
-        notebook first reported 99.53% / 96.70% / 92.44% (train/val/test) &mdash; run on a
-        GPU (Apple Silicon, <code>tensorflow-metal</code>) during local development. Re-measuring
-        the exact same weights on CPU (the only backend Cloud Run actually has &mdash; there's
-        no GPU option there at all) gave a materially worse 88.06% test accuracy, with 154 of
-        1,600 test images flipping predicted class purely based on which backend ran inference.
-        Bisecting that gap layer-by-layer found the exact cause: <code>model.predict()</code>
-        on the Metal GPU backend silently skips the ReLU activation on a Dense layer under
-        compiled-graph execution, passing raw (partly negative) values into the final softmax
-        and corrupting the output. Forcing eager execution fixed it immediately, which
-        confirmed the bug lives in Metal's compiled-graph path, not the model itself &mdash; and
-        matches a known, still-unresolved
-        <a href="https://github.com/tensorflow/tensorflow/issues/61650" target="_blank" rel="noopener">upstream TensorFlow issue</a>.
-        Lesson: never trust a GPU-measured metric for a model that will only ever serve on CPU
-        in production &mdash; every accuracy number on this page is now CPU-verified against the
-        real serving path.
-      </p>
-      <p>
-        <strong>A class the model still confuses.</strong> Meningioma is the real accuracy
-        weak point (67.25% recall, mostly misread as glioma). Grad-CAM inspection pointed at a
-        location-cue problem: the correctly-classified meningioma heatmaps skew toward the
-        skull-adjacent periphery, while gliomas sit deeper and more centrally &mdash; and this
-        architecture's <code>GlobalAveragePooling</code>/<code>GlobalMaxPooling</code> layers
-        can't encode <em>where</em> a signal is, only that it exists. That's likely compounded
-        by <code>RandomErasing</code>, a training-time augmentation that randomly blanks a
-        small rectangular region per image &mdash; a fixed-size erasure box has proportionally
-        higher odds of fully wiping a thin peripheral meningioma than a large central glioma
-        mass. Three fine-tuning attempts followed (shrinking the erasure area, upweighting
-        meningioma/glioma loss, and both together) &mdash; none produced a real, CPU-verified
-        improvement, and the loss-weighting change actively made things worse. A real fix
-        looks like it needs an architectural change (a non-pooled spatial feature), not a
-        training-time tweak, and hasn't been attempted yet.
-      </p>
-      <p>
-        <strong>It performs worse on MRIs that don't match the training data's "house
-        style."</strong> Scans pulled from random sources on the internet &mdash; different
-        scanners, different windowing/contrast conventions, different framing &mdash; are
-        classified noticeably less reliably than the Kaggle test set, even for cases that look
-        unambiguous to the eye. This isn't really a bug so much as an honest limitation of the
-        training data: the source dataset merges three separate collections, each with its own
-        acquisition and preprocessing quirks, and the model has learned some of that as signal
-        rather than noise. My take: if this were being built for an actual hospital or imaging
-        provider, trained and validated on <em>that</em> institution's own scanner output and
-        protocols, I'd expect it to perform well &mdash; but a single model that generalizes
-        well across every MRI machine, protocol, and institution in the world is close to an
-        unsolvable problem with this amount of data. Real clinical deployments are
-        institution-specific for exactly this reason.
-      </p>
-      <p>
-        <strong>A production incident: the live app was silently serving the wrong model.</strong>
-        A user report of "every single prediction wrong" led to discovering that the pinned
-        Hugging Face Hub revision in <code>app/config.py</code>, despite a commit message
-        reading "Retrain: train 99.53% / val 96.70% / test 92.44%," actually contained the
-        <em>pre-retrain</em> model file, verified by SHA-256. The original upload script had
-        pushed the wrong local path to the Hub &mdash; twice &mdash; under a commit message
-        describing the right model. This went uncaught for a while because a correct model
-        file happened to already be sitting in a local dev machine's cache, masking what a
-        fresh <code>scripts/download_model.py</code> run (what Docker build time, and
-        therefore Cloud Run, actually does) would pull. Real production impact was severe:
-        as low as ~42% accuracy with 0% glioma recall, confirmed by sending real images to
-        the live endpoint. The fix was re-uploading the verified-correct file under a new,
-        hash-checked commit and re-pinning the revision &mdash; and the lesson driving the
-        "what's next" item below: a commit message is a claim, not a guarantee; only a hash
-        (or a smoke test) proves what's actually being served.
-      </p>
-    </div>
-  </section>
-
-  <section class="story-section" id="next">
-    <div class="story-section-label"><span>04</span>Roadmap</div>
-    <div class="story-body">
-      <h2>What's next</h2>
-      <ol class="pipeline">
-        <li><strong>Post-deploy smoke test in CI</strong><span>Hit a known-label fixture image against every freshly deployed revision and assert the predicted class, so a wrong-model-file incident like the one above gets caught automatically before a real user does.</span></li>
-        <li><strong>A non-pooled spatial feature</strong><span>Give the architecture some way to encode tumor location instead of collapsing everything through global pooling &mdash; the most promising lead for closing the meningioma/glioma gap, not yet attempted.</span></li>
-        <li><strong>Transfer learning</strong><span>Swap the from-scratch CNN for a pretrained backbone (EfficientNet/ResNet-style) to raise the overall accuracy ceiling beyond what's reachable from ~5,700 training images alone.</span></li>
-        <li><strong>Audit the train/test split</strong><span>The source dataset merges three separate collections &mdash; worth checking for duplicate or near-duplicate scans across the split before trusting these numbers as a hard ceiling.</span></li>
-        <li><strong>Fixed random seed for training</strong><span>Weight initialization currently isn't seeded, so accuracy shifts a little between retraining runs &mdash; pinning it would make future before/after comparisons trustworthy.</span></li>
-      </ol>
-    </div>
-  </section>
-
-  <section class="story-section" id="stack">
-    <div class="story-section-label"><span>05</span>Under the hood</div>
-    <div class="story-body">
-      <h2>Architecture</h2>
-      <p>
-        The backend is split into small, independently testable modules rather than one
-        monolithic route handler: preprocessing (bytes in, normalized array out), inference
-        (array in, prediction out), and Grad-CAM (array in, heatmap out). The FastAPI route
-        layer just wires them together and translates failures into clean HTTP errors &mdash;
-        a bad upload returns a <code>400</code>, never an unhandled crash.
-      </p>
-      <p>
-        The trained <code>.keras</code> file itself never touches git. It's hosted on a public
-        Hugging Face Hub model repo and pulled into the Docker image at <strong>build time</strong>,
-        pinned to a specific commit revision &mdash; so an unrelated code change can never
-        silently swap the live model, and the running container has zero runtime dependency
-        on Hub availability.
-      </p>
-      <div class="chip-row">
-        <span class="chip">TensorFlow / Keras</span>
-        <span class="chip">FastAPI</span>
-        <span class="chip">Grad-CAM</span>
-        <span class="chip">Docker</span>
-        <span class="chip">GitHub Actions</span>
-        <span class="chip">Google Cloud Run</span>
-        <span class="chip">Hugging Face Hub</span>
-        <span class="chip">Vanilla JS frontend</span>
+    <section class="doc-section" id="deploy">
+      <div class="doc-label"><span>05</span>Deployment</div>
+      <div class="doc-body">
+        <h2>Google Cloud Run</h2>
+        <p>
+          The app runs as a single container on Cloud Run with 2&nbsp;GiB of memory and
+          2&nbsp;vCPUs, and scales to zero when idle. A GitHub Actions workflow builds the
+          image, pushes it to Artifact Registry, and deploys a new revision on every push to
+          <code>main</code>.
+        </p>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <section class="story-section" id="deploy">
-    <div class="story-section-label"><span>06</span>Deployment</div>
-    <div class="story-body">
-      <h2>Switching from Hugging Face Spaces to Cloud Run</h2>
-      <p>
-        The original plan was Hugging Face Spaces on its free Docker SDK tier &mdash; a
-        natural fit, since the model was already going to live on the HF Hub. Mid-build,
-        Hugging Face changed policy to require a PRO subscription to create a Docker SDK
-        Space on a personal account, even on free CPU hardware. Paying a subscription fee
-        for a portfolio demo didn't make sense, so the deploy target moved.
-      </p>
-      <p>
-        <strong>Google Cloud Run</strong> ended up a better fit anyway: it runs the exact
-        same Dockerfile unmodified, its free tier's memory ceiling is well above what
-        TensorFlow needs (this app runs at 2&nbsp;GiB / 2&nbsp;vCPU), and it scales to zero
-        when nobody's using it. The only cost is a GCP billing account on file &mdash; no
-        recurring charge at this app's traffic level.
-      </p>
-      <p>
-        GitHub stays the single source of truth throughout: a GitHub Actions workflow builds
-        the image, pushes it to Artifact Registry, and deploys a new Cloud Run revision on
-        every push to <code>main</code>. Nothing gets deployed by hand.
-      </p>
-    </div>
-  </section>
+    <section class="doc-section" id="dataset">
+      <div class="doc-label"><span>06</span>Credit</div>
+      <div class="doc-body">
+        <h2>Dataset and license</h2>
+        <p>
+          Trained on the
+          <a href="https://www.kaggle.com/datasets/masoudnickparvar/brain-tumor-mri-dataset" target="_blank" rel="noopener">brain-tumor-mri-dataset</a>
+          by Msoud Nickparvar, licensed <strong>CC BY 4.0</strong>. It combines the Figshare,
+          SARTAJ, and Br35H datasets. The model weights are on the
+          <a href="https://huggingface.co/KellanMcintosh/mri-tumor-classifier" target="_blank" rel="noopener">Hugging Face Hub</a>.
+          The application code is MIT licensed.
+        </p>
+      </div>
+    </section>
+  </main>
 
-  <section class="story-section" id="dataset">
-    <div class="story-section-label"><span>07</span>Credit</div>
-    <div class="story-body">
-      <h2>Dataset &amp; license</h2>
-      <p>
-        Trained on Kaggle's <a href="https://www.kaggle.com/datasets/masoudnickparvar/brain-tumor-mri-dataset" target="_blank" rel="noopener">brain-tumor-mri-dataset</a>,
-        created by Msoud Nickparvar and licensed <strong>CC BY 4.0</strong> &mdash; itself a
-        combination of the Figshare, SARTAJ, and Br35H datasets. That license requires
-        attribution, which is why it's credited here, in the README, and on the
-        <a href="https://huggingface.co/KellanMcintosh/mri-tumor-classifier" target="_blank" rel="noopener">Hugging Face model card</a>.
-        The application code itself is MIT-licensed.
-      </p>
-    </div>
-  </section>
+  <div class="shell doc-end">
+    <a class="btn" href="/">Open the classifier</a>
+  </div>
 
-  <section class="story-cta">
-    <div class="story-cta-panel">
-      <span class="bracket tl" aria-hidden="true"></span>
-      <span class="bracket br" aria-hidden="true"></span>
-      <h2>See it read a scan</h2>
-      <p>Upload an MRI and watch the pipeline above run end to end, heatmap included.</p>
-      <a class="btn btn-primary" href="/">Try the classifier</a>
-    </div>
-  </section>
-
-  <footer class="site-footer">
-    <p>
-      Built as a portfolio project &mdash; model trained on the Kaggle
-      <em>brain&#8209;tumor&#8209;mri&#8209;dataset</em>. See the
-      <a href="https://github.com/kellanmcintosh/MRI-tumor-Detection-app" target="_blank" rel="noopener">source on GitHub</a>.
-    </p>
+  <footer class="shell site-footer">
+    <p>Educational project, not a diagnostic tool.</p>
+    <p><a href="https://github.com/kellanmcintosh/MRI-tumor-Detection-app" target="_blank" rel="noopener">Source on GitHub</a></p>
   </footer>
 </body>
 </html>

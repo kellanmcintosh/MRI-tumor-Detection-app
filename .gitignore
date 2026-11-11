@@ -16,7 +16,7 @@ ENV/
 .env.local
 kaggle.json
 
-# Model files — the trained model lives on the Hugging Face Hub, never in git.
+# Model files: the trained model lives on the Hugging Face Hub, never in git.
 # app/model/ is populated at Docker build time by scripts/download_model.py.
 *.h5
 *.keras

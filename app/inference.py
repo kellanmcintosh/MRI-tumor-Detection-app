@@ -9,8 +9,8 @@ module never touches the network -- see CLAUDE.md's "Architecture decisions"
 section.
 """
 
-from functools import lru_cache
-from typing import Dict, Tuple
+import threading
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 import tensorflow as tf
@@ -23,10 +23,22 @@ from app.config import CLASS_NAMES, MODEL_PATH
 from app import model_layers  # noqa: F401
 
 
-@lru_cache(maxsize=1)
+_model: Optional[tf.keras.Model] = None
+_model_lock = threading.Lock()
+
+
 def get_model() -> tf.keras.Model:
-    """Load the trained model once and cache it for the process lifetime."""
-    return tf.keras.models.load_model(MODEL_PATH)
+    """Load the trained model once and cache it for the process lifetime.
+
+    Thread-safe: the startup warm-up thread and the first requests can all
+    call this at once, and only one of them loads the file.
+    """
+    global _model
+    if _model is None:
+        with _model_lock:
+            if _model is None:
+                _model = tf.keras.models.load_model(MODEL_PATH)
+    return _model
 
 
 def predict(preprocessed_image: tf.Tensor) -> Tuple[str, Dict[str, float]]:

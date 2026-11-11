@@ -1,13 +1,13 @@
 """Integration tests for the /predict and /health routes, via FastAPI's
 TestClient. Uses real known-label fixture images (Kaggle brain-tumor-mri-dataset
-Testing split, one per class) and asserts against the real loaded model —
+Testing split, one per class) and asserts against the real loaded model,
 no mocks, per CLAUDE.md's testing conventions.
 
 Grad-CAM correctness (whether the heatmap highlights the "right" region) is
-intentionally not asserted here — see CLAUDE.md's testing conventions. The
+intentionally not asserted here. See CLAUDE.md's testing conventions. The
 `gradcam_overlay` field is only checked for well-formedness: valid base64
 that decodes to a 3-channel PNG. It won't match the original upload's exact
-dimensions — the overlay is cropped to content the same way the model input
+dimensions: the overlay is cropped to content the same way the model input
 is (see `app.preprocessing.crop_to_content`), so the heatmap aligns with
 what the model actually saw.
 """
@@ -67,7 +67,7 @@ def test_predict_gradcam_overlay_is_well_formed_image(client, sample_image_bytes
     """The `gradcam_overlay` field must be valid base64 that decodes to a
     well-formed 3-channel PNG, no bigger than the original upload (it's
     cropped to content, so it should be smaller or equal, never larger).
-    Whether the heatmap itself is "correct" is intentionally not asserted —
+    Whether the heatmap itself is "correct" is intentionally not asserted;
     see CLAUDE.md.
     """
     image_bytes = sample_image_bytes("pituitary")

@@ -32,7 +32,7 @@ MRI-tumor-Detection-app/
 ├── scripts/
 │   └── download_model.py          # build-time script: pulls the pinned HF Hub model revision to app/model/
 ├── app/
-│   ├── main.py                    # FastAPI app: /predict, /health, static mount — thin, orchestration only
+│   ├── main.py                    # FastAPI app: /predict, /ready, /health, static mount — thin, orchestration only
 │   ├── config.py                  # IMG_SIZE, CLASS_NAMES (order matters), HF repo id + pinned revision, model path
 │   ├── preprocessing.py           # deep module: raw upload bytes -> normalized (1,256,256,3) array
 │   ├── inference.py                # deep module: array -> predicted class + per-class confidence
