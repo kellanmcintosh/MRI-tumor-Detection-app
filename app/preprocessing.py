@@ -5,7 +5,7 @@ OpenCV. The model was trained on images resized by
 `tf.keras.utils.image_dataset_from_directory`, which decodes and resizes
 images internally using TF's ops. A PIL-based reimplementation uses a
 different resize/interpolation algorithm and would introduce train/serve
-skew — see CLAUDE.md's "Architecture decisions" section. Keep this TF-native
+skew. See CLAUDE.md's "Architecture decisions" section. Keep this TF-native
 if you ever touch it.
 """
 
@@ -105,7 +105,9 @@ def preprocess_image_bytes(image_bytes: bytes) -> tf.Tensor:
     try:
         image = tf.io.decode_image(image_bytes, channels=3, expand_animations=False)
     except (tf.errors.InvalidArgumentError, ValueError) as exc:
-        raise ImageDecodeError(f"Could not decode image: {exc}") from exc
+        raise ImageDecodeError(
+            "Could not read this file as an image. Upload a JPEG, PNG, BMP, or GIF scan."
+        ) from exc
 
     image = tf.image.resize(image, [IMG_SIZE, IMG_SIZE], method="bilinear")
     image = crop_to_content(image, IMG_SIZE)
