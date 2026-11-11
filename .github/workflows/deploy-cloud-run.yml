@@ -48,6 +48,7 @@ jobs:
             --allow-unauthenticated \
             --memory 2Gi \
             --cpu 2 \
+            --cpu-boost \
             --port 8000 \
             --timeout 300 \
             --quiet

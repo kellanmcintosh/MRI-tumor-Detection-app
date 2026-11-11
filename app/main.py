@@ -7,10 +7,17 @@ prediction, heatmap generation) lives in `app.preprocessing`,
 `app.inference`, and `app.gradcam` so each stays testable without spinning
 up FastAPI. Static file serving (the `static/` frontend) is just a mount --
 no logic lives here either.
+
+Cold starts: importing TensorFlow takes far longer than everything else in
+this process, so nothing here imports it at module load. The server starts
+listening (and can serve the static frontend) right away, while a background
+thread imports TensorFlow and loads the model. `/ready` and `/predict` wait
+for that load; `/`, `/about`, `/static` and `/health` never do.
 """
 
 import base64
 import os
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, UploadFile
@@ -19,17 +26,24 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import CLASS_NAMES
-from app.gradcam import generate_gradcam_overlay
-from app.inference import get_model, predict
-from app.preprocessing import ImageDecodeError, preprocess_image_bytes
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static")
 
 
+def _warm_model() -> None:
+    """Import TensorFlow and load the model. Safe to call repeatedly and from
+    several threads: imports are locked by Python, and `get_model` by its own
+    lock."""
+    from app.inference import get_model
+
+    get_model()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Warm the model cache once at process startup, not on the first request.
-    await run_in_threadpool(get_model)
+    # Start warming at process startup, without blocking the server from
+    # accepting requests while it happens.
+    threading.Thread(target=_warm_model, name="model-warmup", daemon=True).start()
     yield
 
 
@@ -66,6 +80,15 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+@app.get("/ready")
+async def ready() -> dict:
+    """Returns once the model is loaded. The frontend calls this on page
+    load: on Cloud Run, CPU is only allocated while a request is in flight,
+    so holding this request open is what lets the warm-up actually run."""
+    await run_in_threadpool(_warm_model)
+    return {"status": "ready"}
+
+
 @app.post("/predict")
 async def predict_endpoint(file: UploadFile) -> dict:
     if file.content_type is None or not file.content_type.startswith("image/"):
@@ -77,6 +100,11 @@ async def predict_endpoint(file: UploadFile) -> dict:
     image_bytes = await file.read()
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    await run_in_threadpool(_warm_model)
+    from app.gradcam import generate_gradcam_overlay
+    from app.inference import get_model, predict
+    from app.preprocessing import ImageDecodeError, preprocess_image_bytes
 
     try:
         preprocessed = preprocess_image_bytes(image_bytes)
